@@ -1,7 +1,7 @@
 # Setup run: detect + track players, calibrate the camera with PnLCalib,
 # and draw players on the pitch (radar) for one GSR clip. Runs on CPU.
 # Run from the repo root:
-#   third_party/sn-gamestate/.venv/bin/tracklab --config-dir configs -cn throughball_setup
+#   MPLBACKEND=Agg third_party/sn-gamestate/.venv/bin/tracklab --config-dir configs -cn throughball_setup
 defaults:
   - dataset: soccernet_gs
   - eval: gs_hota

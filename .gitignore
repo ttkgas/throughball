@@ -1,0 +1,12 @@
+third_party/
+data/
+pretrained_models/
+outputs/
+states/
+.ipynb_checkpoints/
+__pycache__/
+*.pt
+*.pth
+*.pklz
+*.zip
+.env

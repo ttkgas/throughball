@@ -1,0 +1,15 @@
+# throughball
+
+First-person view of a soccer game from a chosen player, built from broadcast video.
+Computer vision course project. See [AGENTS.md](AGENTS.md) for the plan and conventions.
+
+## Get started (Colab)
+Open [notebooks/00_setup.ipynb](notebooks/00_setup.ipynb) in Colab and run all cells.
+It installs the sn-gamestate baseline, downloads one free SoccerNet GSR clip, calibrates
+the camera with PnLCalib and plots the players on the pitch. A CPU runtime is enough.
+
+## Layout
+- `setup.sh`: installs sn-gamestate (pinned) into `third_party/` with a Python 3.9 env
+- `scripts/get_clip.py`: downloads the free GSR validation split and unpacks one clip
+- `configs/`: our TrackLab configs, used with `--config-dir configs`
+- `notebooks/`: Colab notebooks

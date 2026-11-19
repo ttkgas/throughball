@@ -39,7 +39,7 @@ Stages 1-3 must run on CPU. Only the diffusion / video generation work needs a G
 
 ## Data
 SoccerNet Game State Reconstruction (GSR), free download only (no NDA data).
-`scripts/get_clip.py` downloads the free validation split and unpacks one clip
+`scripts/get_clip.py` fetches one free validation clip from the public Hugging Face copy (SoccerNet/SN-GSR-2024, no login), reading only that clip out of the 11 GB valid.zip
 into `data/SoccerNetGS/valid/`. Data never goes in git.
 
 ## Evaluation

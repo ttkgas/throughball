@@ -35,7 +35,8 @@ TrackLab with `--config-dir configs`.
 4. First-person rendering with geometry-guided generation.
    Pure video generation is the comparison baseline. Not started.
 
-Stages 1-3 must run on CPU. Only the diffusion / video generation work needs a GPU.
+Run on a Colab GPU runtime by default; tracklab picks CUDA on its own. Stages 1-3 still
+run on CPU, just slowly (100 frames took 65 minutes on a Colab CPU).
 
 ## Data
 SoccerNet Game State Reconstruction (GSR), free download only (no NDA data).
@@ -84,3 +85,4 @@ we tried. The course accepts partial results when the process is documented.
 - 2026-11-16: Chose this project over deepfake detection. Proposal submitted on Canvas.
 - 2026-11-19: Build on sn-gamestate. Colab first. Free SoccerNet downloads only.
   Setup counts as done when one notebook calibrates a clip and plots players on the pitch on CPU.
+- 2026-11-20: GPU runtime is the default (Tejas). CPU was too slow for day-to-day runs.

@@ -11,6 +11,18 @@ command -v uv >/dev/null || pip install -q uv
 [ -d "$SNGS/.git" ] || git clone -q https://github.com/SoccerNet/sn-gamestate.git "$SNGS"
 git -C "$SNGS" checkout -q "$SNGS_COMMIT"
 
+# PnLCalib weights (~265 MB each) from Zenodo. Its connection drops mid-download, and
+# tracklab's own downloader then leaves a truncated file, so fetch them here with resume.
+W="$PWD/pretrained_models/calibration"; mkdir -p "$W"
+for f in pnl_SV_kp pnl_SV_lines; do
+  url="https://zenodo.org/records/14046275/files/$f?download=1"
+  size=$(curl -sIL "$url" | awk 'tolower($1)=="content-length:"{s=$2} END{print s+0}')
+  [ -f "$W/$f" ] && [ "$(stat -c%s "$W/$f")" = "$size" ] && continue
+  rm -f "$W/$f"
+  curl -fsSL --retry 10 --retry-all-errors -C - -o "$W/$f.part" "$url"
+  mv "$W/$f.part" "$W/$f"
+done
+
 cd "$SNGS"
 unset UV_SYSTEM_PYTHON UV_PYTHON VIRTUAL_ENV  # if set (Colab may), these send installs to the system Python
 uv python install 3.9
@@ -19,4 +31,4 @@ uv pip install -q --python .venv/bin/python -e . pip wheel "setuptools<70"
 .venv/bin/mim install -q mmcv==2.0.1
 # The calibration plugin doesn't package pnlcalib, so put its folder on the path.
 echo "$(pwd)/plugins/calibration" > .venv/lib/python3.9/site-packages/pnlcalib_path.pth
-.venv/bin/python -c "import sys, torch, sn_gamestate, pnlcalib; print('Ready: Python', sys.version.split()[0], 'torch', torch.__version__)"
+.venv/bin/python -c "import sys, torch, sn_gamestate, pnlcalib; print('Ready: Python', sys.version.split()[0], 'torch', torch.__version__, 'GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"

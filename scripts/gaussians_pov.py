@@ -183,6 +183,7 @@ goal = torch.cat(goal)
 means = torch.cat([ground, stand])
 N, NG = len(means), len(ground)
 kind = torch.cat([torch.zeros(NG), torch.ones(nb), 2 * torch.ones(len(stand) - nb)]).to(dev)  # 0 ground, 1 bowl, 2 boards
+on_line = torch.cat([on_line, torch.zeros(N - NG, dtype=torch.bool, device=dev)])
 print(f"background: {NG} ground + {nb} stand + {len(stand) - nb} board Gaussians, {len(goal)} goal frame")
 
 # ---------------- initial colours: average of every frame that sees each Gaussian ----------------

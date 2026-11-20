@@ -31,6 +31,9 @@ TrackLab with `--config-dir configs`.
 1. Camera calibration: PnLCalib (`modules/pitch` + `modules/calibration`).
    Gives per-frame camera parameters and each player's position on the pitch.
 2. Player detection and tracking: YOLO + ByteTrack (no re-id for now).
+   Stages 1-2 run together in tracklab. `scripts/export_stage1.py` turns its state file into
+   `outputs/stage1/<video_id>/cameras.json` (per-frame camera) and `players.csv`
+   (per-frame track id and pitch position in meters). Stage 3 reads only these.
 3. Dynamic 3D scene built with dynamic 3D Gaussians. Not started.
 4. First-person rendering with geometry-guided generation.
    Pure video generation is the comparison baseline. Not started.

@@ -12,5 +12,6 @@ the camera with PnLCalib and plots the players on the pitch. Use a GPU runtime
 ## Layout
 - `setup.sh`: installs sn-gamestate (pinned) into `third_party/` with a Python 3.9 env
 - `scripts/get_clip.py`: fetches one free GSR validation clip from Hugging Face (no login)
+- `scripts/export_stage1.py`: writes per-frame cameras and player pitch positions from a tracklab run
 - `configs/`: our TrackLab configs, used with `--config-dir configs`
 - `notebooks/`: Colab notebooks

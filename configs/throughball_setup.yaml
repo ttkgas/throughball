@@ -40,7 +40,7 @@ print_config: False
 
 dataset:
   nvid: 1
-  nframes: 100  # 4 seconds of video keeps the CPU run short; -1 for the whole clip
+  nframes: 25  # 1 second of video; 100 frames took 65 min on a Colab CPU. -1 for the whole clip
   eval_set: "valid"
   dataset_path: ${data_dir}/SoccerNetGS
   vids_dict:

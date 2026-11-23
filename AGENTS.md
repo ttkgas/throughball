@@ -57,6 +57,10 @@ TrackLab with `--config-dir configs`.
    15000 iters); `--own-share 0.5 --iters 15000` keeps 021 sharp (PSNR 22.2) with the same 77%.
    Guided first-person line F1 0.33 vs 0.35, flicker 1.87 vs 1.85: more real crowd for a
    small cost on the pitch lines, likely from other clips' calibration error.
+   `--players body` puts each player on an upright elliptic cylinder fixed in the broadcast's
+   orientation (seen side toward the broadcast camera, mirrored onto the back) instead of a
+   cutout that turns to face every viewer. SNGS-021 (2026-11-23): broadcast PSNR 22.25 vs 22.31,
+   guided line F1 0.36 vs 0.35, flicker 1.99 vs 1.85; players look narrower side-on, as bodies do.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the

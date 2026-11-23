@@ -71,7 +71,8 @@ TrackLab with `--config-dir configs`.
    shows, didn't bring them back (line F1 0.03 both; removed). `--layout-lines` paints the
    markings where the layout puts them after the fit: SNGS-024 guided line F1 0.58 vs 0.04,
    broadcast PSNR 20.8 vs 21.05; SNGS-021 guided line F1 0.51 vs 0.35, flicker 1.88 vs 1.85,
-   PSNR 22.1 vs 22.3. Line F1 checks against the same layout, so read it as "the lines are
+   PSNR 22.1 vs 22.3; with the four extra clips and body players too, guided line F1 0.48 vs 0.32,
+   flicker 1.88, PSNR 21.9, background seen 76%. Line F1 checks against the same layout, so read it as "the lines are
    there and steady"; PSNR is the independent check.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.

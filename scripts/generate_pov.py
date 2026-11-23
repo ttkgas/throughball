@@ -34,6 +34,7 @@ p.add_argument("--refine", type=float, default=0, help="strength of a whole-fram
 p.add_argument("--strength", type=float, default=0.99, help="inpainting strength in the unseen parts; lower keeps more of the fill stage 3 baked in")
 p.add_argument("--steps", type=int, default=25)
 p.add_argument("--no-baseline", action="store_true")
+p.add_argument("--score-only", action="store_true", help="only rescore guided.mp4 and baseline.mp4")
 p.add_argument("--reuse-baseline", action="store_true", help="read baseline.mp4 from an earlier run instead of generating it")
 a = p.parse_args()
 
@@ -93,7 +94,7 @@ def white(img):
 
 
 def scores(frames):
-    f1, k4 = [], np.ones((9, 9), np.uint8)
+    f1, rc, pr, k4 = [], [], [], np.ones((9, 9), np.uint8)
     for t, f in enumerate(frames):
         h, w = f.shape[:2]
         L, D = line_mask(t, w, h), white(f)
@@ -101,9 +102,10 @@ def scores(frames):
             continue
         rec = (L & cv2.dilate(D, k4)).sum() / L.sum()
         pre = (D & cv2.dilate(L, k4)).sum() / max(D.sum(), 1)
-        f1.append(2 * rec * pre / max(rec + pre, 1e-6))
+        f1.append(2 * rec * pre / max(rec + pre, 1e-6)); rc.append(rec); pr.append(pre)
     flick = np.mean([np.abs(x.astype(np.int16) - y).mean() for x, y in zip(frames[1:], frames)])
-    return {"line_f1": float(np.mean(f1)) if f1 else None, "flicker": float(flick)}
+    m = lambda x: float(np.mean(x)) if x else None
+    return {"line_f1": m(f1), "line_recall": m(rc), "line_precision": m(pr), "flicker": float(flick)}
 
 
 def save(name, frames):
@@ -114,6 +116,11 @@ def save(name, frames):
 
 metrics = {"track": cam["track"], "render": scores(rgb)}
 print("render", metrics["render"])
+if a.score_only:  # rescore the videos of an earlier run (mp4 compression moves the scores a little)
+    for k in ("guided", "baseline"):
+        if (OUT / f"{k}.mp4").exists():
+            print(k, scores([f for f in imageio.get_reader(OUT / f"{k}.mp4")]))
+    raise SystemExit
 
 # ---------------- guided: SDXL inpainting on the Gaussian render ----------------
 from diffusers import AutoPipelineForInpainting

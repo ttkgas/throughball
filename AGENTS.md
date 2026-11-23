@@ -39,7 +39,8 @@ TrackLab with `--config-dir configs`.
    SNGS-021 (2026-11-23, L4): GS-HOTA 31.2. `scripts/gsr_breakdown.sh` re-scores it with parts
    of the metric off: 39.8 without jerseys, 53.7 with no attributes (tracking on the pitch),
    53.6 as plain HOTA on image boxes. So calibration costs nothing; roles and teams cost 14
-   points and jersey numbers 9.
+   points and jersey numbers 9. SNGS-024: GS-HOTA 29.9; 44.2 without jerseys, 45.8 with no
+   attributes, 52.8 on image boxes, so there jerseys cost 14, roles and teams 2, calibration 7.
 3. Dynamic 3D scene built with dynamic 3D Gaussians: `scripts/gaussians_pov.py`
    (`notebooks/01_gaussians_pov.ipynb`). Static pitch-and-stands Gaussians fitted to the
    broadcast frames (`--bg` fits them from a longer export, e.g. the whole clip), plus one
@@ -63,6 +64,15 @@ TrackLab with `--config-dir configs`.
    guided line F1 0.36 vs 0.35, flicker 1.99 vs 1.85; players look narrower side-on, as bodies do.
    Both together (`--bg 021_full,024,028,033,037 --own-share 0.5 --iters 15000 --players body`):
    PSNR 22.1, background seen 77%, guided line F1 0.32, flicker 1.91.
+   SNGS-024 (`CLIP=024 bash scripts/run_all.sh`): PSNR 21.05, seen 73%, but guided line F1 0.03
+   vs 0.05 for the baseline: its calibration jitters (camera centre wanders 25 m along the view
+   ray over 100 frames) and the fit smears the thin lines into the grass. Holding the centre
+   fixed and re-solving rotation and focal length, or snapping each frame to the white lines it
+   shows, didn't bring them back (line F1 0.03 both; removed). `--layout-lines` paints the
+   markings where the layout puts them after the fit: SNGS-024 guided line F1 0.58 vs 0.04,
+   broadcast PSNR 20.8 vs 21.05; SNGS-021 guided line F1 0.51 vs 0.35, flicker 1.88 vs 1.85,
+   PSNR 22.1 vs 22.3. Line F1 checks against the same layout, so read it as "the lines are
+   there and steady"; PSNR is the independent check.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the
@@ -122,6 +132,8 @@ we tried. The course accepts partial results when the process is documented.
 - 2026-11-23: Stage 3 fits the background from the whole clip and mirrors the seen stand
   into unseen ones; generated fill is baked into the 3D scene, not painted per frame
   (a per-frame whole-image SDXL pass halved line F1 and tripled flicker).
+- 2026-11-23: `--layout-lines` for jittery clips: SNGS-024's calibration smears the fitted lines away,
+  and neither a fixed camera centre nor snapping frames to detected lines fixed it.
 - 2026-11-23: Stage 4 baseline is LTX-Video image-to-video. Only stands and sky are generated;
   the pitch and its markings come from the known layout. Line F1 counts only whites on the
   pitch (found from the camera alone, same region for every method).

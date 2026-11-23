@@ -229,7 +229,7 @@ def render(V1, K1, w, h, extra=None, unseen=False):
     m, c, o, s = [torch.cat(x) for x in zip((means, c0, torch.sigmoid(o_l), s_l.exp()), (goal, gcol * (not unseen), gop, gsc), *([extra] if extra else []))]
     q = torch.tensor([1., 0, 0, 0], device=dev).expand(len(m), 4).contiguous()
     img, _, _ = rasterization(m, q, s, o, c, V1[None], K1[None], w, h, render_mode="RGB+ED" if unseen else "RGB",
-                              backgrounds=(torch.tensor([1., 1, 1, 0], device=dev) if unseen else torch.sigmoid(sky_l))[None],
+                              backgrounds=(torch.ones(3, device=dev) if unseen else torch.sigmoid(sky_l))[None], packed=False,
                               rasterize_mode="antialiased", near_plane=0.05)
     return img[0] if unseen else img[0].clamp(0, 1)
 

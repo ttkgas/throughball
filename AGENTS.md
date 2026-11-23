@@ -51,7 +51,12 @@ TrackLab with `--config-dir configs`.
    `bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way, then the GS-HOTA run, and copies each to SAVE_DIR.
    `--bg` also takes other clips of the same match (SNGS-021 to 038 are all game 2;
    `scripts/same_match.py` finds them), keeping only plausible broadcast cameras;
-   `bash scripts/match_bg.sh` runs that with four of them into `*_match` outputs.
+   `bash scripts/match_bg.sh` runs that with four of them (3000 iters, no --own-share) into `*_match` outputs.
+   SNGS-021 with 024, 028, 033, 037 (2026-11-23, L4): background seen 77% (83% with mirrored
+   stands) vs 61% (65%). Drawing all frames alike blurs 021 (PSNR 19.8 vs 22.3; 20.4 even at
+   15000 iters); `--own-share 0.5 --iters 15000` keeps 021 sharp (PSNR 22.2) with the same 77%.
+   Guided first-person line F1 0.33 vs 0.35, flicker 1.87 vs 1.85: more real crowd for a
+   small cost on the pitch lines, likely from other clips' calibration error.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the

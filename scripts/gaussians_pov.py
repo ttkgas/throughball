@@ -12,13 +12,16 @@ Scene, in SoccerNet pitch coordinates (meters, centre spot at 0, z points down):
   players     per-frame Gaussians: each tracked player's segmented pixels placed on a vertical
               plane at their (smoothed) pitch position, one Gaussian per pixel. The plane turns
               to face whichever camera renders it, so from the broadcast camera it reproduces the
-              frame, and from a player's eyes it shows the side the broadcast saw.
+              frame, and from a player's eyes it shows the side the broadcast saw. With
+              --players body they wrap an upright body instead, fixed in the broadcast's
+              orientation, with the seen side mirrored onto the back, so players have depth
+              and turn as you walk round them.
 The first-person camera sits at the chosen player's eye height, looking toward where the
 broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body]
 """
 import argparse
 import glob
@@ -49,6 +52,9 @@ p.add_argument("--out", default=None, help="output folder name under outputs/sta
 p.add_argument("--bg-stride", type=int, default=3, help="use every n-th frame of --bg")
 p.add_argument("--own-share", type=float, default=0, help="share of fit steps drawn from the first --bg export alone "
                "(the clip itself), so other clips add coverage without blurring it; 0 draws all frames alike")
+p.add_argument("--players", choices=["plane", "body"], default="plane", help="plane: each player's pixels on a flat cutout "
+               "turned to face the viewer; body: wrapped on a fixed upright body (an elliptic cylinder), the side the "
+               "broadcast saw toward its camera and the same pixels mirrored onto the back")
 p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
                "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
@@ -88,7 +94,7 @@ df["t"] = df.frame.map({c["frame"]: i for i, c in enumerate(cams)})
 seg = YOLO("yolo11x-seg.pt")
 excl = torch.zeros(T, h2, w2, dtype=torch.bool, device=dev)  # pixels kept out of the background fit
 shrink = lambda ex: F.max_pool2d(F.max_pool2d(ex[None, None].float(), 15, 1, 7), 2)[0, 0] > 0  # grow a little, half resolution
-app = {}  # (track, t) -> per pixel: (u, height) on the player's plane, rgb, Gaussian size
+app = {}  # (track, t) -> per pixel: (u, height) on the player's plane, rgb, Gaussian size, plane normal (xy, away from the camera)
 for t in range(T):
     r = seg.predict(np.ascontiguousarray(frames[t][..., ::-1]), classes=[0], conf=0.2, imgsz=1280, retina_masks=True, verbose=False)[0]
     m = r.masks.data > 0.5 if r.masks is not None else torch.zeros(0, H, W, dtype=torch.bool, device=dev)
@@ -116,7 +122,7 @@ for t in range(T):
         n = F.pad(F.normalize((B - C[t])[:2], dim=0), (0, 1))  # plane normal, horizontal, facing the camera
         s = ((B - C[t]) @ n) / (ray @ n)  # depth along each pixel ray to the player's plane
         X = C[t] + s[:, None] * ray - B
-        app[d.track_id, t] = (X[:, :2] @ torch.stack([-n[1], n[0]]), -X[:, 2], img[ys, xs], (0.6 * s / K[t, 0, 0])[:, None].expand(-1, 3))
+        app[d.track_id, t] = (X[:, :2] @ torch.stack([-n[1], n[0]]), -X[:, 2], img[ys, xs], (0.6 * s / K[t, 0, 0])[:, None].expand(-1, 3), n[:2])
     excl[t] = shrink(ex)
 print(f"segmented players in {len(app)} of {len(df)} tracked detections")
 
@@ -128,7 +134,8 @@ for k, g in df.groupby("track_id"):
 
 
 def players_at(t, P, skip=None):
-    """Player Gaussians at frame t, each player's plane turned to face camera position P."""
+    """Player Gaussians at frame t: each player's plane turned to face camera position P, or with --players body
+    wrapped on an upright elliptic cylinder that keeps the broadcast's orientation, whatever camera renders it."""
     out = []
     for k, (ts, xy, seen) in tracks.items():
         if k == skip or not ts[0] <= t <= ts[-1] or not len(seen):
@@ -136,8 +143,18 @@ def players_at(t, P, skip=None):
         tt = seen[np.abs(seen - t).argmin()]  # nearest frame where this player was segmented
         if abs(tt - t) > 12:
             continue
-        u, hh, rgb, sg = app[k, tt]
+        u, hh, rgb, sg, nb = app[k, tt]
         B = xy[t - ts[0]]
+        if a.players == "body":
+            half = u.abs().quantile(.95).clamp(.15, .45)  # half width across the body, arms mostly out
+            th = torch.asin((u / half).clamp(-1, 1))
+            side = half * torch.sin(th)[:, None] * torch.stack([-nb[1], nb[0]])
+            deep = (.6 * half).clamp(max=.2) * torch.cos(th)[:, None] * nb  # half depth front to back
+            Bt = torch.tensor(B, dtype=torch.float32, device=dev)
+            z = -hh[:, None]
+            out.append((torch.cat([torch.cat([Bt + side - deep, z], 1), torch.cat([Bt + side + deep, z], 1)]),
+                        rgb.repeat(2, 1), torch.ones(2 * len(u), device=dev), sg.repeat(2, 1)))
+            continue
         dx, dy = B - P[:2]
         r = np.array([-dy, dx]) / max(math.hypot(dx, dy), 1e-6)
         out.append((torch.stack([B[0] + u * r[0], B[1] + u * r[1], -hh], 1), rgb, torch.ones_like(u), sg))
@@ -418,7 +435,7 @@ with torch.no_grad():
             cv2.imwrite(str(OUT / f"preview_{a.track}.png"), frame[..., ::-1])
 writer.close()
 metrics = {"track": int(a.track), "frames": T, "psnr_broadcast": float(np.mean(psnr)), "psnr_background_only": float(np.mean(psnr_bg)),
-           "gaussians_background": N, "background_seen": float(seen.float().mean())}
+           "gaussians_background": N, "background_seen": float(seen.float().mean()), "players": a.players}
 json.dump(metrics, open(OUT / "metrics.json", "w"), indent=1)
 json.dump({"track": int(a.track), "K": Kp.cpu().numpy().tolist(), "w": pw, "h": ph, "view": cams}, open(FR / "cameras.json", "w"))
 print(metrics)

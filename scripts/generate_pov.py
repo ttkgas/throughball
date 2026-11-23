@@ -151,7 +151,10 @@ if not a.no_baseline:
     from diffusers import LTXImageToVideoPipeline
 
     b0 = sorted(glob.glob(f"data/SoccerNetGS/*/SNGS-{a.vid}/img1/*.jpg"))[0]
-    vp = LTXImageToVideoPipeline.from_pretrained("Lightricks/LTX-Video", torch_dtype=torch.bfloat16)
+    from transformers import T5TokenizerFast
+
+    tok = T5TokenizerFast.from_pretrained("google-t5/t5-base")  # same vocabulary; LTX's own copy trips transformers 5
+    vp = LTXImageToVideoPipeline.from_pretrained("Lightricks/LTX-Video", tokenizer=tok, torch_dtype=torch.bfloat16)
     vp.enable_model_cpu_offload()
     nf = min(T - (T - 1) % 8, 97)  # LTX wants 8k+1 frames
     out = vp(image=Image.open(b0).convert("RGB"), prompt=prompt.replace("realistic broadcast photo", "the camera moves with the player, realistic video"),

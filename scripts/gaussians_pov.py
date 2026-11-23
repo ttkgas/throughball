@@ -21,7 +21,7 @@ broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--pin-camera]
 """
 import argparse
 import glob
@@ -55,6 +55,9 @@ p.add_argument("--own-share", type=float, default=0, help="share of fit steps dr
 p.add_argument("--players", choices=["plane", "body"], default="plane", help="plane: each player's pixels on a flat cutout "
                "turned to face the viewer; body: wrapped on a fixed upright body (an elliptic cylinder), the side the "
                "broadcast saw toward its camera and the same pixels mirrored onto the back")
+p.add_argument("--pin-camera", action="store_true", help="hold the broadcast camera's centre at its median position (from "
+               "the first --bg export, else this clip) and re-solve each frame's rotation and focal length to keep where it "
+               "puts the pitch; steadies cameras whose centre jitters in calibration, as zoomed-in shots do")
 p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
                "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
@@ -73,18 +76,56 @@ ok = [i for i, c in enumerate(cams) if c["camera"]]
 cam = [cams[min(ok, key=lambda j: abs(j - i))]["camera"] for i in range(T)]  # fill failed frames
 
 
-def cameras(cam):
+# close-ups and replays calibrate badly: a plausible broadcast camera is off the pitch, 3 to 60 m up, within 150 m of the centre spot
+plausible = lambda c: c is not None and (lambda x, y, z: (abs(x) > 52.5 or abs(y) > 34) and 3 < -z < 60 and math.hypot(x, y) < 150)(*c["position_meters"])
+
+
+def pin_centre(R, C, K, C0):
+    """Same frames with the camera centre held at C0: rotation and focal length re-solved so each frame still puts the
+    pitch where its own calibration did. Frames that can't be matched within 8 px (another camera) keep their own."""
+    g = torch.stack(torch.meshgrid(torch.linspace(-52.5, 52.5, 22, device=dev), torch.linspace(-34, 34, 15, device=dev), indexing="ij"), -1)
+    X = F.pad(g.reshape(-1, 2), (0, 1))  # pitch points, z = 0
+
+    def proj(R, C, f):
+        q = torch.einsum("tij,tnj->tni", R, X[None] - C[:, None])
+        return q[..., :2] / q[..., 2:].clamp(min=1e-3) * f[:, None, None], q[..., 2]
+
+    p0, z0 = proj(R, C, K[:, 0, 0])
+    m = ((z0 > 1) & (p0.abs() < torch.tensor([W, H], device=dev) * .6).all(-1)).float()
+    w = torch.zeros(len(R), 3, device=dev, requires_grad=True)
+    lf = K[:, 0, 0].log().clone().requires_grad_()
+    opt = torch.optim.Adam([w, lf], lr=3e-3)
+    for _ in range(600):
+        S = torch.zeros(len(R), 3, 3, device=dev)
+        S[:, 0, 1], S[:, 0, 2], S[:, 1, 2] = -w[:, 2], w[:, 1], -w[:, 0]
+        R1 = torch.linalg.matrix_exp(S - S.transpose(1, 2)) @ R
+        p, _ = proj(R1, C0.expand_as(C), lf.exp())
+        err = (((p - p0) ** 2).sum(-1) * m).sum(1) / m.sum(1).clamp(min=1)
+        opt.zero_grad(); err.sum().backward(); opt.step()
+    good = (err.sqrt() < 8) & (m.sum(1) >= 8)
+    K1 = K.clone(); K1[:, :2, :2] *= (lf.exp() / K[:, 0, 0])[:, None, None]
+    return torch.where(good[:, None, None], R1.detach(), R), torch.where(good[:, None], C0.expand_as(C), C), torch.where(good[:, None, None], K1.detach(), K), good, err.detach().sqrt()
+
+
+def cameras(cam, pin=None):
     R = torch.tensor([c["rotation_matrix"] for c in cam], device=dev)
     C = torch.tensor([c["position_meters"] for c in cam], device=dev)
     K = torch.tensor([[[c["x_focal_length"], 0, c["principal_point"][0]], [0, c["y_focal_length"], c["principal_point"][1]], [0, 0, 1]] for c in cam], device=dev)
     K[:, :2] *= (W / 2 / K[:, 0, 2])[:, None, None]  # in case calibration ran at another resolution
+    if pin is not None:
+        R, C, K, good, rms = pin_centre(R, C, K, pin)
+        print(f"pinned the camera centre in {int(good.sum())} of {len(cam)} frames (median {rms[good].median():.1f} px from their own calibration)")
     V = torch.eye(4, device=dev).repeat(len(cam), 1, 1)
     V[:, :3, :3], V[:, :3, 3] = R, -(R @ C[..., None])[..., 0]
     Kh = K.clone(); Kh[:, :2] /= 2  # half resolution, for fitting
     return R, C, K, V, Kh
 
 
-R, C, K, V, Kh = cameras(cam)
+PIN = None
+if a.pin_camera:
+    src = json.load(open(f"outputs/stage1/{a.bg.split(',')[0] if a.bg else a.vid}/cameras.json"))
+    PIN = torch.tensor([c["camera"]["position_meters"] for c in src if plausible(c["camera"])], device=dev).median(0).values
+R, C, K, V, Kh = cameras(cam, PIN)
 h2, w2 = H // 2, W // 2
 print(f"{T} frames {W}x{H}, {len(ok)} calibrated, camera at {C.median(0).values.tolist()} m")
 
@@ -173,9 +214,7 @@ if a.bg:  # the same match over a longer stretch or other clips: people masked o
         bcams = json.load(open(f"outputs/stage1/{name}/cameras.json"))
         bdf = pd.read_csv(f"outputs/stage1/{name}/players.csv")
         allp = sorted(glob.glob(f"data/SoccerNetGS/*/SNGS-{name.split('_')[0]}/img1/*.jpg"))
-        # close-ups and replays calibrate badly: keep cameras off the pitch, 3 to 60 m up, within 150 m of the centre spot
-        good = [i for i, c in enumerate(bcams) if c["camera"] and (lambda x, y, z: (abs(x) > 52.5 or abs(y) > 34)
-                and 3 < -z < 60 and math.hypot(x, y) < 150)(*c["camera"]["position_meters"])]
+        good = [i for i, c in enumerate(bcams) if plausible(c["camera"])]
         for i in good[::a.bg_stride]:
             f = cv2.imread(allp[i])  # cameras.json is in frame order, like the image files
             r = seg.predict(f, classes=[0], conf=0.2, imgsz=1280, retina_masks=True, verbose=False)[0]
@@ -187,7 +226,7 @@ if a.bg:  # the same match over a longer stretch or other clips: people masked o
             sel.append(bcams[i]["camera"])
         own = len(sel) if name == a.bg.split(",")[0] else own
         print(f"background: {len(good[::a.bg_stride])} frames of {name} ({len(good)} of {len(bcams)} with a plausible camera, every {a.bg_stride}th)")
-    bR, bC, _, bV, bKh = cameras(sel)
+    bR, bC, _, bV, bKh = cameras(sel, PIN)
     btgt, bexcl, bok = torch.stack(btgt), torch.stack(bexcl), list(range(len(sel)))
 bT = len(bok)
 

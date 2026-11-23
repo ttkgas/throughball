@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 SAVE=${1:-}
 save() {  # never creates SAVE_DIR's parent, so an unmounted Drive is reported, not shadowed
   [ -z "$SAVE" ] && return; mkdir "$SAVE" 2>/dev/null || true
-  cp -r "outputs/stage$1" "$SAVE/" && echo "== stage $1 saved to $SAVE" || echo "!! stage $1 not saved: is $SAVE's parent mounted?"
+  cp -r "outputs/$1" "$SAVE/" && echo "== $1 saved to $SAVE" || echo "!! $1 not saved: is $SAVE's parent mounted?"
 }
 TL=third_party/sn-gamestate/.venv/bin
 newest() { ls -t outputs/throughball-setup/*/*/states/*.pklz | head -1; }
@@ -23,12 +23,18 @@ if [ ! -f outputs/stage1/021_full/cameras.json ]; then  # the whole clip, for th
   MPLBACKEND=Agg $TL/tracklab --config-dir configs -cn throughball_setup dataset.nframes=-1
   $TL/python scripts/export_stage1.py "$(newest)" 021_full
 fi
-save 1
+save stage1
 
 pip install -q gsplat ultralytics imageio-ffmpeg ninja
 ls outputs/stage3/021/pov_*/cameras.json >/dev/null 2>&1 || python -u scripts/gaussians_pov.py --vid 021 --bg 021_full --fill 10
-save 3
+save stage3
 
 pip install -q -U diffusers transformers accelerate sentencepiece imageio-ffmpeg
 [ -f outputs/stage4/021/compare.mp4 ] || python -u scripts/generate_pov.py --vid 021
-save 4
+save stage4
+
+# GS-HOTA of the full game state pipeline (roles, teams, jersey numbers) on the whole clip
+mkdir -p outputs/gsr
+[ -f outputs/gsr/log.txt ] && grep -q GS-HOTA outputs/gsr/log.txt || \
+  MPLBACKEND=Agg $TL/tracklab --config-dir configs -cn throughball_gsr 2>&1 | tee outputs/gsr/log.txt
+save gsr

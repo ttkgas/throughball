@@ -34,6 +34,8 @@ TrackLab with `--config-dir configs`.
    Stages 1-2 run together in tracklab. `scripts/export_stage1.py` turns its state file into
    `outputs/stage1/<video_id>/cameras.json` (per-frame camera) and `players.csv`
    (per-frame track id and pitch position in meters). Stage 3 reads only these.
+   Scored with GS-HOTA by `configs/throughball_gsr.yaml`, which adds sn-gamestate's re-id,
+   jersey number, role and team modules (GS-HOTA needs them) and runs the whole clip.
 3. Dynamic 3D scene built with dynamic 3D Gaussians: `scripts/gaussians_pov.py`
    (`notebooks/01_gaussians_pov.ipynb`). Static pitch-and-stands Gaussians fitted to the
    broadcast frames (`--bg` fits them from a longer export, e.g. the whole clip), plus one
@@ -42,7 +44,7 @@ TrackLab with `--config-dir configs`.
    `--fill N` inpaints every Nth first-person frame and bakes it into the unseen Gaussians.
    Best run so far (SNGS-021): stage 1 on all 750 frames (`nframes: -1`), exported with
    `export_stage1.py <state> 021_full`, then `--bg 021_full --fill 10`.
-   `bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way and copies each to SAVE_DIR.
+   `bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way, then the GS-HOTA run, and copies each to SAVE_DIR.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the

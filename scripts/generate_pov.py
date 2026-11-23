@@ -3,8 +3,8 @@
 Reads stage 3's raw first-person frames (outputs/stage3/<vid>/pov_<track>/: rgb, unseen mask, depth,
 cameras.json) and the clip's broadcast frames.
   guided    each Gaussian render frame goes through SDXL inpainting: the parts no broadcast frame saw
-            (sky, stands behind the camera, far pitch) are generated, then a light pass over the whole
-            frame (--refine) makes the render look like footage. Geometry, players and camera come
+            (sky, stands behind the camera, far pitch) are generated, optionally a light pass over the whole
+            frame (--refine) makes the render look more like footage. Geometry, players and camera come
             from stage 3, so the pitch lines stay where the 3D scene puts them.
   baseline  LTX-Video, image to video: the first broadcast frame and a text prompt asking for the
             player's view. No geometry, no camera.
@@ -15,7 +15,7 @@ Scores (there is no real first-person footage to compare with):
   flicker   mean absolute change between consecutive frames (0-255). Lower is steadier.
 Writes outputs/stage4/<vid>/: compare.mp4 (render | guided | baseline), guided.mp4, baseline.mp4,
 preview.png, metrics.json.
-Usage: python scripts/generate_pov.py [--vid 021] [--refine 0.3] [--no-baseline]
+Usage: python scripts/generate_pov.py [--vid 021] [--refine 0] [--no-baseline]
 """
 import argparse
 import glob
@@ -30,7 +30,7 @@ from PIL import Image
 
 p = argparse.ArgumentParser()
 p.add_argument("--vid", default="021")
-p.add_argument("--refine", type=float, default=0.3, help="strength of the whole-frame pass, 0 to skip")
+p.add_argument("--refine", type=float, default=0, help="strength of a whole-frame SDXL pass, 0 to skip (0.3 halved line_f1 and tripled flicker)")
 p.add_argument("--steps", type=int, default=25)
 p.add_argument("--no-baseline", action="store_true")
 a = p.parse_args()

@@ -17,7 +17,7 @@ broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = no broadcast frame saw it, depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full] [--fill 10]
 """
 import argparse
 import glob
@@ -44,6 +44,8 @@ p.add_argument("--fov", type=float, default=90, help="horizontal field of view, 
 p.add_argument("--bg", default=None, help="stage 1 export of a longer stretch of the same broadcast (e.g. 021_full) to fit the "
                "background from: stands and pitch seen at other moments fill what this window never saw")
 p.add_argument("--bg-stride", type=int, default=3, help="use every n-th frame of --bg")
+p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
+               "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
 dev = "cuda"
 torch.manual_seed(0)
@@ -314,6 +316,39 @@ def pov_view(t):
     Vp = np.eye(4); Vp[:3, :3], Vp[:3, 3] = Rp, -Rp @ E
     return torch.tensor(Vp, dtype=torch.float32, device=dev), E
 
+
+# ---------------- fill: generated keyframes baked into the scene ----------------
+if a.fill:
+    from diffusers import AutoPipelineForInpainting
+    from PIL import Image
+
+    pipe = AutoPipelineForInpainting.from_pretrained("diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+                                                     torch_dtype=torch.float16, variant="fp16").to(dev)
+    pipe.set_progress_bar_config(disable=True)
+    prompt = "packed football stadium stands full of spectators, green grass pitch, floodlights, night sky, realistic broadcast photo"
+    keys = []
+    with torch.no_grad():
+        for t in range(0, T, a.fill):
+            Vp, _ = pov_view(t)
+            img, un = render(Vp, Kp, pw, ph), render(Vp, Kp, pw, ph, unseen=True)[..., 0] > .5
+            if un.float().mean() < .01:
+                continue
+            m = cv2.dilate(un.cpu().numpy().astype(np.uint8) * 255, np.ones((9, 9), np.uint8))
+            out = pipe(prompt, negative_prompt="cartoon, painting, blurry, text, watermark, people close up", width=1024, height=576,
+                       image=Image.fromarray((img.cpu().numpy() * 255).astype(np.uint8)).resize((1024, 576)),
+                       mask_image=Image.fromarray(m).resize((1024, 576)), strength=0.99, num_inference_steps=25,
+                       generator=torch.Generator(dev).manual_seed(t)).images[0]
+            keys.append((Vp, torch.from_numpy(np.array(out.resize((pw // 2, ph // 2)))).to(dev).float() / 255,
+                         F.interpolate(un[None, None].float(), size=(ph // 2, pw // 2))[0, 0] > .5))
+    del pipe
+    torch.cuda.empty_cache()
+    Kp2 = Kp.clone(); Kp2[:2] /= 2
+    opt = torch.optim.Adam([c_l], lr=.03)  # colours only, and only where no footage stands behind them
+    for it in range(600):
+        Vp, gt, m = keys[np.random.randint(len(keys))]
+        loss = ((render(Vp, Kp2, pw // 2, ph // 2) - gt).abs().mean(-1) * m).sum() / m.sum()
+        opt.zero_grad(); loss.backward(); c_l.grad[real] = 0; opt.step()
+    print(f"fill: {len(keys)} generated keyframes baked into the unseen Gaussians (L1 {loss.item():.3f})")
 
 # ---------------- map, video, metrics ----------------
 LINES = pitch_lines()

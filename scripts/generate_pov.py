@@ -15,7 +15,7 @@ Scores (there is no real first-person footage to compare with):
   flicker   mean absolute change between consecutive frames (0-255). Lower is steadier.
 Writes outputs/stage4/<vid>/: compare.mp4 (render | guided | baseline), guided.mp4, baseline.mp4,
 preview.png, metrics.json.
-Usage: python scripts/generate_pov.py [--vid 021] [--strength 0.99] [--refine 0] [--no-baseline | --reuse-baseline]
+Usage: python scripts/generate_pov.py [--vid 021] [--strength 0.6] [--refine 0] [--no-baseline | --reuse-baseline]
 """
 import argparse
 import glob
@@ -31,7 +31,7 @@ from PIL import Image
 p = argparse.ArgumentParser()
 p.add_argument("--vid", default="021")
 p.add_argument("--refine", type=float, default=0, help="strength of a whole-frame SDXL pass, 0 to skip (0.3 halved line_f1 and tripled flicker)")
-p.add_argument("--strength", type=float, default=0.99, help="inpainting strength in the unseen parts; lower keeps more of the fill stage 3 baked in")
+p.add_argument("--strength", type=float, default=0.6, help="inpainting strength in the unseen parts; 0.6 keeps the fill stage 3 baked in (flicker 1.9 vs 2.7 at 0.99)")
 p.add_argument("--steps", type=int, default=25)
 p.add_argument("--no-baseline", action="store_true")
 p.add_argument("--score-only", action="store_true", help="only rescore guided.mp4 and baseline.mp4")

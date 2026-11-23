@@ -143,6 +143,7 @@ torch.cuda.empty_cache()
 save("guided", guided)
 metrics["guided"] = scores(guided)
 print("guided", metrics["guided"])
+json.dump(metrics, open(OUT / "metrics.json", "w"), indent=1)
 
 # ---------------- baseline: LTX-Video from the first broadcast frame ----------------
 baseline = None

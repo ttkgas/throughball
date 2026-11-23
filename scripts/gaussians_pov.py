@@ -13,7 +13,8 @@ Scene, in SoccerNet pitch coordinates (meters, centre spot at 0, z points down):
 The first-person camera sits at the chosen player's eye height, looking toward where the
 broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
-preview_<track>.png and metrics.json.
+preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
+(rgb_*.png, unseen_*.png where 255 = no broadcast frame saw it, depth_*.png in mm with 0 for sky, cameras.json).
 Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000]
 """
 import argparse
@@ -220,12 +221,17 @@ gcol, gop, gsc = torch.full((len(goal), 3), .95, device=dev), torch.ones(len(goa
 opt = torch.optim.Adam([{"params": [c_l], "lr": .02}, {"params": [o_l], "lr": .02}, {"params": [s_l], "lr": .002}, {"params": [sky_l], "lr": .01}])
 
 
-def render(V1, K1, w, h, extra=None):
-    m, c, o, s = [torch.cat(x) for x in zip((means, torch.sigmoid(c_l), torch.sigmoid(o_l), s_l.exp()), (goal, gcol, gop, gsc), *([extra] if extra else []))]
+def render(V1, K1, w, h, extra=None, unseen=False):
+    """RGB from camera V1, K1. With unseen=True: RGB is 1 where the broadcast never saw (unseen background, sky), and a 4th channel is depth."""
+    c0 = (~seen).float()[:, None].expand(-1, 3) if unseen else torch.sigmoid(c_l)
+    if unseen and extra:
+        extra = [extra[0], torch.zeros_like(extra[1]), *extra[2:]]
+    m, c, o, s = [torch.cat(x) for x in zip((means, c0, torch.sigmoid(o_l), s_l.exp()), (goal, gcol * (not unseen), gop, gsc), *([extra] if extra else []))]
     q = torch.tensor([1., 0, 0, 0], device=dev).expand(len(m), 4).contiguous()
-    img, _, _ = rasterization(m, q, s, o, c, V1[None], K1[None], w, h,
-                              backgrounds=torch.sigmoid(sky_l)[None], rasterize_mode="antialiased", near_plane=0.05)
-    return img[0].clamp(0, 1)
+    img, _, _ = rasterization(m, q, s, o, c, V1[None], K1[None], w, h, render_mode="RGB+ED" if unseen else "RGB",
+                              backgrounds=(torch.ones(3, device=dev) if unseen else torch.sigmoid(sky_l))[None],
+                              rasterize_mode="antialiased", near_plane=0.05)
+    return img[0] if unseen else img[0].clamp(0, 1)
 
 
 for it in range(a.iters + 1):
@@ -288,7 +294,9 @@ def label(img, text):
 
 
 writer = imageio.get_writer(OUT / f"pov_{a.track}.mp4", fps=25, codec="libx264", quality=8, macro_block_size=8)
-psnr, psnr_bg = [], []
+psnr, psnr_bg, cams = [], [], []
+FR = OUT / f"pov_{a.track}"  # raw first-person frames: rgb, unseen mask (255 = no frame saw it), depth in mm
+FR.mkdir(exist_ok=True)
 with torch.no_grad():
     for t in range(T):
         Cb = C[t].cpu().numpy()
@@ -299,7 +307,13 @@ with torch.no_grad():
         psnr.append(-10 * math.log10(err.mean().item()))
         psnr_bg.append(-10 * math.log10(err[bgm].mean().item()))
         Vp, E = pov_view(t)
-        pov = render(Vp, Kp, pw, ph, players_at(t, E, skip=a.track))
+        pl = players_at(t, E, skip=a.track)
+        pov = render(Vp, Kp, pw, ph, pl)
+        aux = render(Vp, Kp, pw, ph, pl, unseen=True)  # for stage 4: what to generate, and depth
+        cv2.imwrite(str(FR / f"rgb_{t:04d}.png"), (pov.cpu().numpy()[..., ::-1] * 255).astype(np.uint8))
+        cv2.imwrite(str(FR / f"unseen_{t:04d}.png"), (aux[..., 0].clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+        cv2.imwrite(str(FR / f"depth_{t:04d}.png"), (aux[..., 3].clamp(0, 65.535).cpu().numpy() * 1000).astype(np.uint16))
+        cams.append(Vp.cpu().numpy().tolist())
         tiles = [frames[t], (rec.cpu().numpy() * 255).astype(np.uint8), (pov.cpu().numpy() * 255).astype(np.uint8), minimap(t)]
         tiles = [label(cv2.resize(x, (960, 540), interpolation=cv2.INTER_AREA), n) for x, n in
                  zip(tiles, ["broadcast", "3D Gaussians, broadcast camera", f"first person, player {a.track}", "map"])]
@@ -311,5 +325,6 @@ writer.close()
 metrics = {"track": int(a.track), "frames": T, "psnr_broadcast": float(np.mean(psnr)), "psnr_background_only": float(np.mean(psnr_bg)),
            "gaussians_background": N, "background_seen": float(seen.float().mean())}
 json.dump(metrics, open(OUT / "metrics.json", "w"), indent=1)
+json.dump({"track": int(a.track), "K": Kp.cpu().numpy().tolist(), "w": pw, "h": ph, "view": cams}, open(FR / "cameras.json", "w"))
 print(metrics)
 print(f"wrote {OUT}/pov_{a.track}.mp4")

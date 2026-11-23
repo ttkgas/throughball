@@ -34,9 +34,16 @@ TrackLab with `--config-dir configs`.
    Stages 1-2 run together in tracklab. `scripts/export_stage1.py` turns its state file into
    `outputs/stage1/<video_id>/cameras.json` (per-frame camera) and `players.csv`
    (per-frame track id and pitch position in meters). Stage 3 reads only these.
-3. Dynamic 3D scene built with dynamic 3D Gaussians. Not started.
-4. First-person rendering with geometry-guided generation.
-   Pure video generation is the comparison baseline. Not started.
+3. Dynamic 3D scene built with dynamic 3D Gaussians: `scripts/gaussians_pov.py`
+   (`notebooks/01_gaussians_pov.ipynb`). Static pitch-and-stands Gaussians fitted to the
+   broadcast frames (`--bg` fits them from a longer export, e.g. the whole clip), plus one
+   Gaussian billboard per tracked player. Renders a first-person view for one track and a
+   broadcast check, and writes raw frames, unseen masks, depth and cameras for stage 4.
+   `--fill N` inpaints every Nth first-person frame and bakes it into the unseen Gaussians.
+4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
+   (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
+   Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the
+   projected markings and by frame-to-frame flicker (no real first-person footage exists).
 
 Run on a Colab GPU runtime by default; tracklab picks CUDA on its own. Stages 1-3 still
 run on CPU, just slowly (100 frames took 65 minutes on a Colab CPU).
@@ -89,3 +96,7 @@ we tried. The course accepts partial results when the process is documented.
 - 2026-11-19: Build on sn-gamestate. Colab first. Free SoccerNet downloads only.
   Setup counts as done when one notebook calibrates a clip and plots players on the pitch on CPU.
 - 2026-11-20: GPU runtime is the default (Tejas). CPU was too slow for day-to-day runs.
+- 2026-11-23: Stage 3 fits the background from the whole clip and mirrors the seen stand
+  into unseen ones; generated fill is baked into the 3D scene, not painted per frame
+  (a per-frame whole-image SDXL pass halved line F1 and tripled flicker).
+- 2026-11-23: Stage 4 baseline is LTX-Video image-to-video.

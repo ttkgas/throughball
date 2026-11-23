@@ -15,7 +15,7 @@ Scores (there is no real first-person footage to compare with):
   flicker   mean absolute change between consecutive frames (0-255). Lower is steadier.
 Writes outputs/stage4/<vid>/: compare.mp4 (render | guided | baseline), guided.mp4, baseline.mp4,
 preview.png, metrics.json.
-Usage: python scripts/generate_pov.py [--vid 021] [--refine 0] [--no-baseline]
+Usage: python scripts/generate_pov.py [--vid 021] [--strength 0.99] [--refine 0] [--no-baseline | --reuse-baseline]
 """
 import argparse
 import glob
@@ -31,8 +31,10 @@ from PIL import Image
 p = argparse.ArgumentParser()
 p.add_argument("--vid", default="021")
 p.add_argument("--refine", type=float, default=0, help="strength of a whole-frame SDXL pass, 0 to skip (0.3 halved line_f1 and tripled flicker)")
+p.add_argument("--strength", type=float, default=0.99, help="inpainting strength in the unseen parts; lower keeps more of the fill stage 3 baked in")
 p.add_argument("--steps", type=int, default=25)
 p.add_argument("--no-baseline", action="store_true")
+p.add_argument("--reuse-baseline", action="store_true", help="read baseline.mp4 from an earlier run instead of generating it")
 a = p.parse_args()
 
 src = sorted(glob.glob(f"outputs/stage3/{a.vid}/pov_*/cameras.json"))[-1]
@@ -131,11 +133,15 @@ for t in range(T):
     m = cv2.dilate(unseen[t], np.ones((9, 9), np.uint8))
     if m.mean() > 2:
         img = pipe(prompt, negative_prompt=neg, image=img, mask_image=Image.fromarray(m).resize((gw, gh)), width=gw, height=gh,
-                   strength=0.99, num_inference_steps=a.steps, guidance_scale=7, generator=g).images[0]
+                   strength=a.strength, num_inference_steps=a.steps, guidance_scale=7, generator=g).images[0]
     if a.refine > 0:
         img = pipe(prompt, negative_prompt=neg, image=img, mask_image=full, width=gw, height=gh,
                    strength=a.refine, num_inference_steps=a.steps, guidance_scale=6, generator=g).images[0]
-    guided.append(np.array(img.resize((W, H), Image.LANCZOS)))
+    out = np.array(img.resize((W, H), Image.LANCZOS))
+    if a.refine == 0:  # the pipeline re-encodes the whole frame; keep the render exactly where footage exists
+        soft = cv2.GaussianBlur(m, (0, 0), 3)[..., None] / 255.
+        out = (soft * out + (1 - soft) * rgb[t]).round().astype(np.uint8)
+    guided.append(out)
     if t % 10 == 0:
         print(f"guided {t}/{T}", flush=True)
 del pipe
@@ -147,7 +153,10 @@ json.dump(metrics, open(OUT / "metrics.json", "w"), indent=1)
 
 # ---------------- baseline: LTX-Video from the first broadcast frame ----------------
 baseline = None
-if not a.no_baseline:
+if a.reuse_baseline and (OUT / "baseline.mp4").exists():
+    baseline = [f for f in imageio.get_reader(OUT / "baseline.mp4")]
+    metrics["baseline"] = scores(baseline)
+elif not a.no_baseline:
     from diffusers import LTXImageToVideoPipeline
 
     b0 = sorted(glob.glob(f"data/SoccerNetGS/*/SNGS-{a.vid}/img1/*.jpg"))[0]

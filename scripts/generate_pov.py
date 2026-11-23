@@ -9,8 +9,8 @@ cameras.json) and the clip's broadcast frames.
   baseline  LTX-Video, image to video: the first broadcast frame and a text prompt asking for the
             player's view. No geometry, no camera.
 Scores (there is no real first-person footage to compare with):
-  line_f1   pitch markings found in the output (white, low saturation pixels) against the markings
-            projected through the first-person camera, within 4 px. Tests whether the view is
+  line_f1   pitch markings found in the output (white, low saturation pixels on the pitch) against the
+            markings projected through the first-person camera, within 4 px. Tests whether the view is
             where the player stands and looks.
   flicker   mean absolute change between consecutive frames (0-255). Lower is steadier.
 Writes outputs/stage4/<vid>/: compare.mp4 (render | guided | baseline), guided.mp4, baseline.mp4,
@@ -71,6 +71,15 @@ def pitch_lines():
 
 LINES = pitch_lines()
 K = np.array(cam["K"])
+RAYS = np.stack([*np.meshgrid(np.arange(W) + .5, np.arange(H) + .5), np.ones((H, W))], -1) @ np.linalg.inv(K).T
+
+
+def on_pitch(t):  # pixels whose ray meets the pitch plane inside the pitch (2 m margin), from the camera alone
+    V = np.array(cam["view"][t])
+    C, d = -V[:3, :3].T @ V[:3, 3], RAYS @ V[:3, :3]
+    s = -C[2] / np.where(np.abs(d[..., 2]) > 1e-9, d[..., 2], 1e-9)
+    P = C + s[..., None] * d
+    return (s > 0) & (np.abs(P[..., 0]) < 54.5) & (np.abs(P[..., 1]) < 36)
 
 
 def line_mask(t, w, h):
@@ -97,7 +106,7 @@ def scores(frames):
     f1, rc, pr, k4 = [], [], [], np.ones((9, 9), np.uint8)
     for t, f in enumerate(frames):
         h, w = f.shape[:2]
-        L, D = line_mask(t, w, h), white(f)
+        L, D = line_mask(t, w, h), white(f) & cv2.resize(on_pitch(t).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)  # whites off the pitch (crowd, boards) are not markings
         if L.sum() < 50:
             continue
         rec = (L & cv2.dilate(D, k4)).sum() / L.sum()
@@ -121,9 +130,6 @@ if a.score_only:  # rescore the videos of an earlier run (mp4 compression moves 
         if (OUT / f"{k}.mp4").exists():
             print(k, scores([f for f in imageio.get_reader(OUT / f"{k}.mp4")]))
     raise SystemExit
-
-RAYS = np.stack(np.meshgrid(np.arange(W) + .5, np.arange(H) + .5) + [np.ones((H, W))], -1) @ np.linalg.inv(K).T
-
 
 def ground(t):  # pixels whose depth lands on the pitch plane (z = 0)
     D = cv2.imread(str(FR / f"depth_{t:04d}.png"), -1) / 1000.

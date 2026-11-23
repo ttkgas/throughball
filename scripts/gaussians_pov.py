@@ -21,7 +21,7 @@ broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--pin-camera 60]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--pin-camera 100] [--snap-lines]
 """
 import argparse
 import glob
@@ -57,8 +57,10 @@ p.add_argument("--players", choices=["plane", "body"], default="plane", help="pl
                "broadcast saw toward its camera and the same pixels mirrored onto the back")
 p.add_argument("--pin-camera", type=float, default=0, metavar="PX", help="hold the broadcast camera's centre at its median position (from "
                "the first --bg export, else this clip) and re-solve each frame's rotation and focal length to keep where it "
-               "puts the pitch; steadies cameras whose centre jitters in calibration, as zoomed-in shots do. Frames the fixed camera can't match within PX pixels (another camera) keep their "
-               "own. A 2 m shift alone moves the pitch 10-15 px, so PX is well above 8")
+               "puts the pitch; steadies cameras whose centre jitters in calibration, as zoomed-in shots do. Frames it can't match within PX pixels (another camera) keep their own. "
+               "Even 2 m of real jitter moves the pitch 10-15 px, so try 100")
+p.add_argument("--snap-lines", action="store_true", help="refine each frame's rotation and focal length so the known pitch "
+               "lines fall on the white lines the frame shows; jittery calibrations otherwise blur the lines out of the fitted pitch")
 p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
                "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
@@ -79,6 +81,18 @@ cam = [cams[min(ok, key=lambda j: abs(j - i))]["camera"] for i in range(T)]  # f
 
 # close-ups and replays calibrate badly: a plausible broadcast camera is off the pitch, 3 to 60 m up, within 150 m of the centre spot
 plausible = lambda c: c is not None and (lambda x, y, z: (abs(x) > 52.5 or abs(y) > 34) and 3 < -z < 60 and math.hypot(x, y) < 150)(*c["position_meters"])
+
+
+def pitch_lines():
+    L = [[(-52.5, -34), (52.5, -34), (52.5, 34), (-52.5, 34), (-52.5, -34)], [(0, -34), (0, 34)]]
+    th = np.linspace(0, 2 * np.pi, 73)
+    L.append(list(zip(9.15 * np.cos(th), 9.15 * np.sin(th))))
+    for s in (-1, 1):
+        L.append([(s * 52.5, -20.16), (s * 36, -20.16), (s * 36, 20.16), (s * 52.5, 20.16)])
+        L.append([(s * 52.5, -9.16), (s * 47, -9.16), (s * 47, 9.16), (s * 52.5, 9.16)])
+        th = np.linspace(-1, 1, 21) * np.arccos(5.5 / 9.15)
+        L.append(list(zip(s * (41.5 - 9.15 * np.cos(th)), 9.15 * np.sin(th))))
+    return [np.array(l, dtype=np.float32) for l in L]
 
 
 def pin_centre(R, C, K, C0, px):
@@ -233,19 +247,68 @@ if a.bg:  # the same match over a longer stretch or other clips: people masked o
     btgt, bexcl, bok = torch.stack(btgt), torch.stack(bexcl), list(range(len(sel)))
 bT = len(bok)
 
+
+def snap_lines(R, C, Kh, imgs, ex, steps=500, cap=30.):
+    """Re-solve each frame's rotation and focal length (centre kept) so the known pitch lines land on the white line
+    pixels the frame actually shows: mean distance to the nearest white, capped so stray whites barely pull.
+    Works at half resolution; whites under players or off the pitch (as the starting camera sees it) don't count."""
+    P = np.concatenate([np.stack([np.interp(np.arange(0, s[-1], .25), s, l[:, k]) for k in (0, 1)], 1)
+                        for l in pitch_lines() for s in [np.r_[0, np.cumsum(np.linalg.norm(np.diff(l, axis=0), axis=1))]]])
+    X = F.pad(torch.from_numpy(P).float().to(dev), (0, 1))
+    v, u = torch.meshgrid(torch.arange(h2, device=dev), torch.arange(w2, device=dev), indexing="ij")
+    D = []
+    for t in range(len(R)):
+        d = torch.einsum("ji,jk,hwk->hwi", R[t], torch.linalg.inv(Kh[t]), torch.stack([u, v, torch.ones_like(u)], -1).float())
+        g = C[t, :2] - C[t, 2] / d[..., 2:].clamp(min=1e-6) * d[..., :2]  # where each pixel's ray meets the ground
+        onp = ((d[..., 2] > 0) & (g[..., 0].abs() < 56) & (g[..., 1].abs() < 37.5) & ~ex[t]).cpu().numpy()
+        hsv = cv2.cvtColor(imgs[t].cpu().numpy(), cv2.COLOR_RGB2HSV)
+        wh = (hsv[..., 1] < 70) & (hsv[..., 2] > 150) & onp
+        D.append(cv2.distanceTransform((~wh).astype(np.uint8), cv2.DIST_L2, 3))
+    D = torch.from_numpy(np.stack(D)).to(dev).clamp(max=cap)[:, None]
+    hide = ex.float()[:, None]
+    w = torch.zeros(len(R), 3, device=dev, requires_grad=True)
+    lf = torch.zeros(len(R), device=dev, requires_grad=True)
+
+    def cost(w, lf):
+        S = torch.zeros(len(R), 3, 3, device=dev)
+        S[:, 0, 1], S[:, 0, 2], S[:, 1, 2] = -w[:, 2], w[:, 1], -w[:, 0]
+        R1 = torch.linalg.matrix_exp(S - S.transpose(1, 2)) @ R
+        q = torch.einsum("tij,tnj->tni", R1, X[None] - C[:, None])
+        z = q[..., 2:]
+        uv = q[..., :2] / z.clamp(min=1e-3) * (torch.stack([Kh[:, 0, 0], Kh[:, 1, 1]], 1) * lf.exp()[:, None])[:, None] + Kh[:, None, :2, 2]
+        gr = (uv / torch.tensor([w2 - 1, h2 - 1], device=dev) * 2 - 1)[:, :, None]
+        vis = (z[..., 0] > .5) & (gr[:, :, 0].abs() < 1).all(-1)
+        vis &= F.grid_sample(hide, gr, mode="nearest", align_corners=True)[:, 0, :, 0] < .5
+        d = F.grid_sample(D, gr, align_corners=True)[:, 0, :, 0]
+        return (d * vis).sum(1) / vis.sum(1).clamp(min=1), vis.sum(1), R1
+
+    c0, n0, _ = cost(w, lf)
+    opt = torch.optim.Adam([w, lf], lr=2e-3)
+    sched = torch.optim.lr_scheduler.ExponentialLR(opt, (1e-5 / 2e-3) ** (1 / steps))
+    for _ in range(steps):
+        c, _, _ = cost(w, lf)
+        opt.zero_grad(); c.sum().backward(); opt.step(); sched.step()
+    with torch.no_grad():
+        c1, n1, R1 = cost(w, lf)
+    good = (c1 < c0) & (n1 >= 50)
+    K1 = Kh.clone(); K1[:, :2, :2] *= lf.detach().exp()[:, None, None]
+    R, Kh = torch.where(good[:, None, None], R1, R), torch.where(good[:, None, None], K1, Kh)
+    print(f"snapped {int(good.sum())} of {len(R)} frames to the pitch lines: median distance to the nearest white "
+          f"{c0.median():.1f} -> {torch.where(good, c1, c0).median():.1f} px (half resolution, capped at {cap:.0f})")
+    V = torch.eye(4, device=dev).repeat(len(R), 1, 1)
+    V[:, :3, :3], V[:, :3, 3] = R, -(R @ C[..., None])[..., 0]
+    K = Kh.clone(); K[:, :2] *= 2
+    return R, K, V, Kh
+
+
+if a.snap_lines:
+    R, K, V, Kh = snap_lines(R, C, Kh, tgt, excl)
+    if a.bg:
+        bR, _, bV, bKh = snap_lines(bR, bC, bKh, btgt, bexcl)
+    else:
+        bR, bV, bKh = R, V, Kh
+
 # ---------------- background Gaussians on known geometry ----------------
-def pitch_lines():
-    L = [[(-52.5, -34), (52.5, -34), (52.5, 34), (-52.5, 34), (-52.5, -34)], [(0, -34), (0, 34)]]
-    th = np.linspace(0, 2 * np.pi, 73)
-    L.append(list(zip(9.15 * np.cos(th), 9.15 * np.sin(th))))
-    for s in (-1, 1):
-        L.append([(s * 52.5, -20.16), (s * 36, -20.16), (s * 36, 20.16), (s * 52.5, 20.16)])
-        L.append([(s * 52.5, -9.16), (s * 47, -9.16), (s * 47, 9.16), (s * 52.5, 9.16)])
-        th = np.linspace(-1, 1, 21) * np.arccos(5.5 / 9.15)
-        L.append(list(zip(s * (41.5 - 9.15 * np.cos(th)), 9.15 * np.sin(th))))
-    return [np.array(l, dtype=np.float32) for l in L]
-
-
 g = 0.08  # ground spacing, meters
 gx, gy = torch.meshgrid(torch.arange(-57, 57, g, device=dev), torch.arange(-39, 39, g, device=dev), indexing="ij")
 ground = torch.stack([gx.flatten(), gy.flatten(), torch.zeros(gx.numel(), device=dev)], 1)

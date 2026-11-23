@@ -130,7 +130,7 @@ guided = []
 for t in range(T):
     g = torch.Generator("cuda").manual_seed(0)  # same noise every frame keeps the fill steadier
     img = Image.fromarray(rgb[t]).resize((gw, gh), Image.LANCZOS)
-    m = cv2.dilate(unseen[t], np.ones((9, 9), np.uint8))
+    m = cv2.dilate((unseen[t] > 127).astype(np.uint8) * 255, np.ones((9, 9), np.uint8))  # the soft mask is ~3% over the whole pitch
     if m.mean() > 2:
         img = pipe(prompt, negative_prompt=neg, image=img, mask_image=Image.fromarray(m).resize((gw, gh)), width=gw, height=gh,
                    strength=a.strength, num_inference_steps=a.steps, guidance_scale=7, generator=g).images[0]

@@ -21,7 +21,7 @@ broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--layout-lines]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--layout-lines] [--sky-dome]
 """
 import argparse
 import glob
@@ -57,6 +57,8 @@ p.add_argument("--players", choices=["plane", "body"], default="plane", help="pl
                "broadcast saw toward its camera and the same pixels mirrored onto the back")
 p.add_argument("--layout-lines", action="store_true", help="after fitting, paint the pitch markings white where the known "
                "layout puts them, also on pitch the footage saw (by default only unseen pitch gets layout lines)")
+p.add_argument("--sky-dome", action="store_true", help="add a shell of Gaussians beyond the stands, so --fill bakes one steady "
+               "sky into the scene instead of stage 4 painting a new one every frame")
 p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
                "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
@@ -247,12 +249,20 @@ for sx in (-52.5, 52.5):
     goal.append(torch.stack([torch.full_like(y, sx), y, torch.full_like(y, -2.44)], 1))
 goal = torch.cat(goal)
 
-means = torch.cat([ground, stand])
+sky = torch.zeros(0, 3, device=dev)
+if a.sky_dome:  # a hemisphere 150 m out, 1.5 m apart, from just above the horizon; the broadcast never fits it
+    r, d = 150., 1.5
+    rings = []
+    for e in np.arange(math.radians(2), math.pi / 2, d / r):
+        az = torch.linspace(0, 2 * math.pi, max(round(2 * math.pi * r * math.cos(e) / d), 1) + 1, device=dev)[:-1]
+        rings.append(torch.stack([r * math.cos(e) * az.cos(), r * math.cos(e) * az.sin(), torch.full_like(az, -r * math.sin(e))], 1))
+    sky = torch.cat(rings)
+means = torch.cat([ground, stand, sky])
 N, NG = len(means), len(ground)
-kind = torch.cat([torch.zeros(NG), torch.ones(nb), 2 * torch.ones(len(stand) - nb)]).to(dev)  # 0 ground, 1 bowl, 2 boards
+kind = torch.cat([torch.zeros(NG), torch.ones(nb), 2 * torch.ones(len(stand) - nb), 3 * torch.ones(len(sky))]).to(dev)  # 0 ground, 1 bowl, 2 boards, 3 sky
 on_line = torch.cat([on_line, torch.zeros(N - NG, dtype=torch.bool, device=dev)])
-hide = torch.cat([torch.zeros(NG, dtype=torch.bool, device=dev), near])  # near stand, left out from the broadcast camera
-print(f"background: {NG} ground + {nb} stand + {len(stand) - nb} board Gaussians, {len(goal)} goal frame")
+hide = torch.cat([torch.zeros(NG, dtype=torch.bool, device=dev), near, torch.ones(len(sky), dtype=torch.bool, device=dev)])  # left out from the broadcast camera: near stand, sky dome
+print(f"background: {NG} ground + {nb} stand + {len(stand) - nb} board + {len(sky)} sky Gaussians, {len(goal)} goal frame")
 
 # ---------------- initial colours: average of every frame that sees each Gaussian ----------------
 csum, cnt = torch.zeros(N, 3, device=dev), torch.zeros(N, device=dev)
@@ -287,7 +297,9 @@ for k in (1, 2):  # still unseen stand: crowd colours sampled from the seen stan
     miss = ~seen & (kind == k) & ((col == 0).all(1) if k == 1 else True)
     if len(pool):
         col[miss] = pool[torch.randint(len(pool), (int(miss.sum()),), device=dev)] if k == 1 else pool.mean(0)
-print(f"seen by the broadcast: {seen.float().mean():.0%} of background Gaussians, {real.float().mean():.0%} with mirrored stands")
+col[kind == 3] = torch.tensor([.12, .14, .2], device=dev)  # night sky until --fill paints it
+pit = kind < 3  # pitch and stands, the share the stats count (the hidden sky dome is never seen)
+print(f"seen by the broadcast: {seen[pit].float().mean():.0%} of background Gaussians, {real[pit].float().mean():.0%} with mirrored stands")
 real |= kind == 0  # unseen pitch: grass and markings come from the known pitch layout, nothing to generate there
 
 # ---------------- fit colours, opacities and sizes to the frames ----------------
@@ -295,6 +307,7 @@ c_l = torch.logit(col.clamp(.02, .98)).requires_grad_()
 o_l = torch.full((N,), 3., device=dev).requires_grad_()
 sc0 = torch.where(kind[:, None] == 0, torch.tensor([.6 * g, .6 * g, .005], device=dev), torch.tensor(.6 * b, device=dev).repeat(3))
 sc0[kind == 2] = .06
+sc0[kind == 3] = 1.2
 s_l = sc0.log().requires_grad_()
 sky_l = torch.zeros(3, device=dev).requires_grad_()
 gcol, gop, gsc = torch.full((len(goal), 3), .95, device=dev), torch.ones(len(goal), device=dev), torch.full((len(goal), 3), .05, device=dev)
@@ -440,7 +453,7 @@ with torch.no_grad():
             cv2.imwrite(str(OUT / f"preview_{a.track}.png"), frame[..., ::-1])
 writer.close()
 metrics = {"track": int(a.track), "frames": T, "psnr_broadcast": float(np.mean(psnr)), "psnr_background_only": float(np.mean(psnr_bg)),
-           "gaussians_background": N, "background_seen": float(seen.float().mean()), "players": a.players}
+           "gaussians_background": N, "background_seen": float(seen[pit].float().mean()), "players": a.players}
 json.dump(metrics, open(OUT / "metrics.json", "w"), indent=1)
 json.dump({"track": int(a.track), "K": Kp.cpu().numpy().tolist(), "w": pw, "h": ph, "view": cams}, open(FR / "cameras.json", "w"))
 print(metrics)

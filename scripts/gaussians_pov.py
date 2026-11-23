@@ -16,7 +16,7 @@ The first-person camera sits at the chosen player's eye height, looking toward w
 broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
-(rgb_*.png, unseen_*.png where 255 = no broadcast frame saw it, depth_*.png in mm with 0 for sky, cameras.json).
+(rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
 Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full] [--fill 10]
 """
 import argparse
@@ -258,6 +258,7 @@ for k in (1, 2):  # still unseen stand: crowd colours sampled from the seen stan
     if len(pool):
         col[miss] = pool[torch.randint(len(pool), (int(miss.sum()),), device=dev)] if k == 1 else pool.mean(0)
 print(f"seen by the broadcast: {seen.float().mean():.0%} of background Gaussians, {real.float().mean():.0%} with mirrored stands")
+real |= kind == 0  # unseen pitch: grass and markings come from the known pitch layout, nothing to generate there
 
 # ---------------- fit colours, opacities and sizes to the frames ----------------
 c_l = torch.logit(col.clamp(.02, .98)).requires_grad_()

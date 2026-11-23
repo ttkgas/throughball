@@ -49,7 +49,7 @@ TrackLab with `--config-dir configs`.
    `--fill N` inpaints every Nth first-person frame and bakes it into the unseen Gaussians.
    Best run so far (SNGS-021): stage 1 on all 750 frames (`nframes: -1`), exported with
    `export_stage1.py <state> 021_full`, then `--bg 021_full --fill 10`.
-   `[CLIP=024] bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way (with `--layout-lines`) (on SNGS-021 by default), then the GS-HOTA run, and copies each to SAVE_DIR.
+   `[CLIP=024] bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way (with `--layout-lines --sky-dome`) (on SNGS-021 by default), then the GS-HOTA run, and copies each to SAVE_DIR.
    `--bg` also takes other clips of the same match (SNGS-021 to 038 are all game 2;
    `scripts/same_match.py` finds them), keeping only plausible broadcast cameras;
    `bash scripts/match_bg.sh` runs that with four of them (with `--own-share 0.5 --iters 15000`) into `*_match` outputs.
@@ -74,6 +74,10 @@ TrackLab with `--config-dir configs`.
    PSNR 22.1 vs 22.3; with the four extra clips and body players too, guided line F1 0.48 vs 0.32,
    flicker 1.88, PSNR 21.9, background seen 76%. Line F1 checks against the same layout, so read it as "the lines are
    there and steady"; PSNR is the independent check.
+   `--sky-dome` adds a hemisphere of Gaussians 150 m out (hidden from the broadcast fit) that
+   `--fill` paints, so the sky (11% of the first-person view) is part of the scene instead of a flat
+   colour. SNGS-021 with `--fill 10 --layout-lines`: guided flicker 1.86 vs 1.88, line F1 0.51 both,
+   PSNR unchanged; the stadium now shows a roof and floodlights above the stands instead of grey.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the
@@ -135,6 +139,7 @@ we tried. The course accepts partial results when the process is documented.
   (a per-frame whole-image SDXL pass halved line F1 and tripled flicker).
 - 2026-11-23: `--layout-lines` for jittery clips: SNGS-024's calibration smears the fitted lines away,
   and neither a fixed camera centre nor snapping frames to detected lines fixed it.
+- 2026-11-23: `--sky-dome` on by default in run_all.sh and match_bg.sh: small flicker gain, no cost.
 - 2026-11-23: Stage 4 baseline is LTX-Video image-to-video. Only stands and sky are generated;
   the pitch and its markings come from the known layout. Line F1 counts only whites on the
   pitch (found from the camera alone, same region for every method).

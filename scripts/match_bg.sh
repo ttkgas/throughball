@@ -22,7 +22,7 @@ for c in $CLIPS; do
   fi
   BG=$BG,$c
 done
-ls outputs/stage3/021_match/pov_*/cameras.json >/dev/null 2>&1 || python -u scripts/gaussians_pov.py --vid 021 --bg $BG --fill 10 --iters 15000 --own-share 0.5 --layout-lines --out 021_match
+ls outputs/stage3/021_match/pov_*/cameras.json >/dev/null 2>&1 || python -u scripts/gaussians_pov.py --vid 021 --bg $BG --fill 10 --iters 15000 --own-share 0.5 --layout-lines --sky-dome --out 021_match
 save stage3/021_match
 mkdir -p outputs/stage4/021_match; [ -f outputs/stage4/021/baseline.mp4 ] && cp -n outputs/stage4/021/baseline.mp4 outputs/stage4/021_match/
 [ -f outputs/stage4/021_match/compare.mp4 ] || python -u scripts/generate_pov.py --vid 021_match --reuse-baseline

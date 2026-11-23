@@ -40,6 +40,8 @@ TrackLab with `--config-dir configs`.
    Gaussian billboard per tracked player. Renders a first-person view for one track and a
    broadcast check, and writes raw frames, unseen masks, depth and cameras for stage 4.
    `--fill N` inpaints every Nth first-person frame and bakes it into the unseen Gaussians.
+   Best run so far (SNGS-021): stage 1 on all 750 frames (`nframes: -1`), exported with
+   `export_stage1.py <state> 021_full`, then `--bg 021_full --fill 10`.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the
@@ -99,4 +101,6 @@ we tried. The course accepts partial results when the process is documented.
 - 2026-11-23: Stage 3 fits the background from the whole clip and mirrors the seen stand
   into unseen ones; generated fill is baked into the 3D scene, not painted per frame
   (a per-frame whole-image SDXL pass halved line F1 and tripled flicker).
-- 2026-11-23: Stage 4 baseline is LTX-Video image-to-video.
+- 2026-11-23: Stage 4 baseline is LTX-Video image-to-video. Only stands and sky are generated;
+  the pitch and its markings come from the known layout. Line F1 counts only whites on the
+  pitch (found from the camera alone, same region for every method).

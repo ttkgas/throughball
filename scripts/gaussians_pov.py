@@ -21,7 +21,7 @@ broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--pin-camera 100] [--snap-lines]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5] [--players body] [--pin-camera 100] [--snap-lines] [--layout-lines]
 """
 import argparse
 import glob
@@ -61,6 +61,8 @@ p.add_argument("--pin-camera", type=float, default=0, metavar="PX", help="hold t
                "Even 2 m of real jitter moves the pitch 10-15 px, so try 100")
 p.add_argument("--snap-lines", action="store_true", help="refine each frame's rotation and focal length so the known pitch "
                "lines fall on the white lines the frame shows; jittery calibrations otherwise blur the lines out of the fitted pitch")
+p.add_argument("--layout-lines", action="store_true", help="after fitting, paint the pitch markings white where the known "
+               "layout puts them, also on pitch the footage saw (by default only unseen pitch gets layout lines)")
 p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
                "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
@@ -425,6 +427,9 @@ for it in range(a.iters + 1):
     opt.zero_grad(); loss.backward(); opt.step()
     if it % 500 == 0:
         print(f"fit {it}/{a.iters}: L1 {loss.item():.4f}")
+if a.layout_lines:  # jittery calibration smears thin lines into the grass; the layout says exactly where they are
+    with torch.no_grad():
+        c_l[on_line] = torch.logit(torch.tensor(.9, device=dev))
 
 # ---------------- first-person camera ----------------
 A = torch.stack([C[t] - C[t, 2] / R[t, 2, 2] * R[t, 2] for t in range(T)]).cpu().numpy()[:, :2]  # where the broadcast points, on the pitch

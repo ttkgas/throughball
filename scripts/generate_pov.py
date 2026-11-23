@@ -122,6 +122,16 @@ if a.score_only:  # rescore the videos of an earlier run (mp4 compression moves 
             print(k, scores([f for f in imageio.get_reader(OUT / f"{k}.mp4")]))
     raise SystemExit
 
+RAYS = np.stack(np.meshgrid(np.arange(W) + .5, np.arange(H) + .5) + [np.ones((H, W))], -1) @ np.linalg.inv(K).T
+
+
+def ground(t):  # pixels whose depth lands on the pitch plane (z = 0)
+    D = cv2.imread(str(FR / f"depth_{t:04d}.png"), -1) / 1000.
+    V = np.array(cam["view"][t])
+    Z = ((RAYS * D[..., None] - V[:3, 3]) @ V[:3, :3])[..., 2]
+    return (D > 0) & (np.abs(Z) < .3)
+
+
 # ---------------- guided: SDXL inpainting on the Gaussian render ----------------
 from diffusers import AutoPipelineForInpainting
 
@@ -138,6 +148,8 @@ for t in range(T):
     g = torch.Generator("cuda").manual_seed(0)  # same noise every frame keeps the fill steadier
     img = Image.fromarray(rgb[t]).resize((gw, gh), Image.LANCZOS)
     m = cv2.dilate((unseen[t] > 127).astype(np.uint8) * 255, np.ones((9, 9), np.uint8))  # the soft mask is ~3% over the whole pitch
+    gr = ground(t)
+    m[gr] = 0  # the pitch and its markings are known: never generate over them
     if m.mean() > 2:
         img = pipe(prompt, negative_prompt=neg, image=img, mask_image=Image.fromarray(m).resize((gw, gh)), width=gw, height=gh,
                    strength=a.strength, num_inference_steps=a.steps, guidance_scale=7, generator=g).images[0]
@@ -146,7 +158,7 @@ for t in range(T):
                    strength=a.refine, num_inference_steps=a.steps, guidance_scale=6, generator=g).images[0]
     out = np.array(img.resize((W, H), Image.LANCZOS))
     if a.refine == 0:  # the pipeline re-encodes the whole frame; keep the render exactly where footage exists
-        soft = cv2.GaussianBlur(m, (0, 0), 3)[..., None] / 255.
+        soft = cv2.GaussianBlur(m, (0, 0), 3)[..., None] / 255. * ~gr[..., None]
         out = (soft * out + (1 - soft) * rgb[t]).round().astype(np.uint8)
     guided.append(out)
     if t % 10 == 0:

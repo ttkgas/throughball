@@ -29,7 +29,7 @@ import torch
 from PIL import Image
 
 p = argparse.ArgumentParser()
-p.add_argument("--vid", default="021")
+p.add_argument("--vid", default="021", help="stage 3 output folder (e.g. 021 or 021_match); its clip is the part before _")
 p.add_argument("--refine", type=float, default=0, help="strength of a whole-frame SDXL pass, 0 to skip (0.3 halved line_f1 and tripled flicker)")
 p.add_argument("--strength", type=float, default=0.6, help="inpainting strength in the unseen parts; 0.6 keeps the fill stage 3 baked in (flicker 1.9 vs 2.7 at 0.99)")
 p.add_argument("--steps", type=int, default=25)
@@ -184,7 +184,7 @@ if a.reuse_baseline and (OUT / "baseline.mp4").exists():
 elif not a.no_baseline:
     from diffusers import LTXImageToVideoPipeline
 
-    b0 = sorted(glob.glob(f"data/SoccerNetGS/*/SNGS-{a.vid}/img1/*.jpg"))[0]
+    b0 = sorted(glob.glob(f"data/SoccerNetGS/*/SNGS-{a.vid.split('_')[0]}/img1/*.jpg"))[0]
     from transformers import T5TokenizerFast
 
     tok = T5TokenizerFast.from_pretrained("google-t5/t5-base")  # same vocabulary; LTX's own copy trips transformers 5

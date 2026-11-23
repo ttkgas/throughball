@@ -61,6 +61,8 @@ TrackLab with `--config-dir configs`.
    orientation (seen side toward the broadcast camera, mirrored onto the back) instead of a
    cutout that turns to face every viewer. SNGS-021 (2026-11-23): broadcast PSNR 22.25 vs 22.31,
    guided line F1 0.36 vs 0.35, flicker 1.99 vs 1.85; players look narrower side-on, as bodies do.
+   Both together (`--bg 021_full,024,028,033,037 --own-share 0.5 --iters 15000 --players body`):
+   PSNR 22.1, background seen 77%, guided line F1 0.32, flicker 1.91.
 4. First-person rendering with geometry-guided generation: `scripts/generate_pov.py`
    (`notebooks/02_generate_pov.ipynb`). SDXL inpaints what no broadcast frame saw.
    Baseline: LTX-Video from the first broadcast frame. Scored by pitch-line F1 against the

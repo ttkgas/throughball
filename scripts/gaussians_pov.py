@@ -94,14 +94,15 @@ def pin_centre(R, C, K, C0):
     m = ((z0 > 1) & (p0.abs() < torch.tensor([W, H], device=dev) * .6).all(-1)).float()
     w = torch.zeros(len(R), 3, device=dev, requires_grad=True)
     lf = K[:, 0, 0].log().clone().requires_grad_()
-    opt = torch.optim.Adam([w, lf], lr=3e-3)
-    for _ in range(600):
+    opt = torch.optim.Adam([w, lf], lr=1e-2)
+    sched = torch.optim.lr_scheduler.ExponentialLR(opt, (1e-5 / 1e-2) ** (1 / 1500))  # anneal: a constant step jitters by ~lr * f pixels
+    for _ in range(1500):
         S = torch.zeros(len(R), 3, 3, device=dev)
         S[:, 0, 1], S[:, 0, 2], S[:, 1, 2] = -w[:, 2], w[:, 1], -w[:, 0]
         R1 = torch.linalg.matrix_exp(S - S.transpose(1, 2)) @ R
         p, _ = proj(R1, C0.expand_as(C), lf.exp())
         err = (((p - p0) ** 2).sum(-1) * m).sum(1) / m.sum(1).clamp(min=1)
-        opt.zero_grad(); err.sum().backward(); opt.step()
+        opt.zero_grad(); err.sum().backward(); opt.step(); sched.step()
     good = (err.sqrt() < 8) & (m.sum(1) >= 8)
     K1 = K.clone(); K1[:, :2, :2] *= (lf.exp() / K[:, 0, 0])[:, None, None]
     return torch.where(good[:, None, None], R1.detach(), R), torch.where(good[:, None], C0.expand_as(C), C), torch.where(good[:, None, None], K1.detach(), K), good, err.detach().sqrt()

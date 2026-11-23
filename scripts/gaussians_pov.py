@@ -114,7 +114,8 @@ def cameras(cam, pin=None):
     K[:, :2] *= (W / 2 / K[:, 0, 2])[:, None, None]  # in case calibration ran at another resolution
     if pin is not None:
         R, C, K, good, rms = pin_centre(R, C, K, pin)
-        print(f"pinned the camera centre in {int(good.sum())} of {len(cam)} frames (median {rms[good].median():.1f} px from their own calibration)")
+        q = rms.nan_to_num(1e9).quantile(torch.tensor([.1, .5, .9], device=dev)).tolist()
+        print(f"pinned the camera centre in {int(good.sum())} of {len(cam)} frames (10/50/90% of frames within {q[0]:.1f}/{q[1]:.1f}/{q[2]:.1f} px of their own calibration)")
     V = torch.eye(4, device=dev).repeat(len(cam), 1, 1)
     V[:, :3, :3], V[:, :3, 3] = R, -(R @ C[..., None])[..., 0]
     Kh = K.clone(); Kh[:, :2] /= 2  # half resolution, for fitting

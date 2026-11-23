@@ -8,8 +8,10 @@ cd "$(dirname "$0")/.."
 SAVE=${1:-}; CLIPS=${2:-"024 028 033 037"}
 TL=third_party/sn-gamestate/.venv/bin
 newest() { ls -t outputs/throughball-setup/*/*/states/*.pklz | head -1; }
-save() { [ -z "$SAVE" ] && return; mkdir "$SAVE" 2>/dev/null || true; mkdir -p "$SAVE/$(dirname "$1")"
-  cp -r "outputs/$1" "$SAVE/$(dirname "$1")/" && echo "== $1 saved to $SAVE" || echo "!! $1 not saved: is $SAVE's parent mounted?"; }
+save() {  # never creates SAVE_DIR's parent, so an unmounted Drive is reported, not shadowed
+  [ -z "$SAVE" ] && return
+  [ -d "$(dirname "$SAVE")" ] || { echo "!! $1 not saved: is $SAVE's parent mounted?"; return; }
+  mkdir -p "$SAVE/$(dirname "$1")" && cp -r "outputs/$1" "$SAVE/$(dirname "$1")/" && echo "== $1 saved to $SAVE"; }
 BG=021_full
 for c in $CLIPS; do
   $TL/python scripts/get_clip.py SNGS-$c

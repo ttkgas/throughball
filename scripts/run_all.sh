@@ -26,7 +26,7 @@ fi
 save stage1
 
 pip install -q gsplat ultralytics imageio-ffmpeg ninja
-ls outputs/stage3/$C/pov_*/cameras.json >/dev/null 2>&1 || python -u scripts/gaussians_pov.py --vid $C --bg ${C}_full --fill 10
+ls outputs/stage3/$C/pov_*/cameras.json >/dev/null 2>&1 || python -u scripts/gaussians_pov.py --vid $C --bg ${C}_full --fill 10 --layout-lines
 save stage3
 
 pip install -q -U diffusers transformers accelerate sentencepiece imageio-ffmpeg

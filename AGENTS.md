@@ -49,7 +49,7 @@ TrackLab with `--config-dir configs`.
    `--fill N` inpaints every Nth first-person frame and bakes it into the unseen Gaussians.
    Best run so far (SNGS-021): stage 1 on all 750 frames (`nframes: -1`), exported with
    `export_stage1.py <state> 021_full`, then `--bg 021_full --fill 10`.
-   `[CLIP=024] bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way (on SNGS-021 by default), then the GS-HOTA run, and copies each to SAVE_DIR.
+   `[CLIP=024] bash scripts/run_all.sh [SAVE_DIR]` redoes stages 1 to 4 this way (with `--layout-lines`) (on SNGS-021 by default), then the GS-HOTA run, and copies each to SAVE_DIR.
    `--bg` also takes other clips of the same match (SNGS-021 to 038 are all game 2;
    `scripts/same_match.py` finds them), keeping only plausible broadcast cameras;
    `bash scripts/match_bg.sh` runs that with four of them (with `--own-share 0.5 --iters 15000`) into `*_match` outputs.

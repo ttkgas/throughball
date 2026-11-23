@@ -36,6 +36,10 @@ TrackLab with `--config-dir configs`.
    (per-frame track id and pitch position in meters). Stage 3 reads only these.
    Scored with GS-HOTA by `configs/throughball_gsr.yaml`, which adds sn-gamestate's re-id,
    jersey number, role and team modules (GS-HOTA needs them) and runs the whole clip.
+   SNGS-021 (2026-11-23, L4): GS-HOTA 31.2. `scripts/gsr_breakdown.sh` re-scores it with parts
+   of the metric off: 39.8 without jerseys, 53.7 with no attributes (tracking on the pitch),
+   53.6 as plain HOTA on image boxes. So calibration costs nothing; roles and teams cost 14
+   points and jersey numbers 9.
 3. Dynamic 3D scene built with dynamic 3D Gaussians: `scripts/gaussians_pov.py`
    (`notebooks/01_gaussians_pov.ipynb`). Static pitch-and-stands Gaussians fitted to the
    broadcast frames (`--bg` fits them from a longer export, e.g. the whole clip), plus one

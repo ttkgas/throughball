@@ -6,7 +6,7 @@ Writes, per video, under outputs/stage1/<video_id>/:
   players.csv   one row per tracked detection: frame, track_id, pitch x/y in meters
                 (bottom-middle of the box, pitch centre at 0,0), and the image box
 These are what stage 3 (dynamic 3D Gaussians) reads, so it never needs tracklab.
-Usage: python scripts/export_stage1.py [path/to/state.pklz]  (default: newest under outputs/)
+Usage: python scripts/export_stage1.py [path/to/state.pklz] [name]  (default: newest under outputs/; name: output folder, default the video id)
 """
 import glob
 import json
@@ -25,7 +25,7 @@ for name in zf.namelist():
     vid = name[: -len("_image.pkl")]
     images = pd.read_pickle(zf.open(name)).sort_values("frame")
     dets = pd.read_pickle(zf.open(f"{vid}.pkl"))
-    out = Path("outputs/stage1") / str(images["video_id"].iloc[0])
+    out = Path("outputs/stage1") / (sys.argv[2] if len(sys.argv) > 2 else str(images["video_id"].iloc[0]))
     out.mkdir(parents=True, exist_ok=True)
 
     cams = [{"frame": int(r.frame), "image_id": str(r.Index), "camera": r.parameters or None}

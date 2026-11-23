@@ -4,8 +4,10 @@ Reads stage 1 (outputs/stage1/<vid>/{cameras.json, players.csv}) and the clip's 
 Scene, in SoccerNet pitch coordinates (meters, centre spot at 0, z points down):
   background  Gaussians on known geometry: the pitch plane, a stadium bowl around it, and the
               goal frames. Positions stay fixed; colours, opacities and sizes are fit to every
-              frame with gsplat, players masked out. Parts no frame saw keep a prior: grass with
-              the standard line markings, and crowd colours drawn from the stand that was seen.
+              frame with gsplat, players masked out. With --bg the background is fit from a longer
+              stretch of the same broadcast, so stands seen at other moments are real footage.
+              Parts no frame saw keep a prior: grass with the standard line markings, and the
+              stand across the pitch mirrored in (stadiums are roughly symmetric).
   players     per-frame Gaussians: each tracked player's segmented pixels placed on a vertical
               plane at their (smoothed) pitch position, one Gaussian per pixel. The plane turns
               to face whichever camera renders it, so from the broadcast camera it reproduces the
@@ -39,6 +41,9 @@ p.add_argument("--track", type=int, default=None, help="track id to see through 
 p.add_argument("--iters", type=int, default=3000)
 p.add_argument("--eye", type=float, default=1.7, help="eye height, meters")
 p.add_argument("--fov", type=float, default=90, help="horizontal field of view, degrees")
+p.add_argument("--bg", default=None, help="stage 1 export of a longer stretch of the same broadcast (e.g. 021_full) to fit the "
+               "background from: stands and pitch seen at other moments fill what this window never saw")
+p.add_argument("--bg-stride", type=int, default=3, help="use every n-th frame of --bg")
 a = p.parse_args()
 dev = "cuda"
 torch.manual_seed(0)
@@ -53,13 +58,20 @@ frames = [cv2.imread(f)[..., ::-1].copy() for f in paths]  # RGB uint8
 H, W = frames[0].shape[:2]
 ok = [i for i, c in enumerate(cams) if c["camera"]]
 cam = [cams[min(ok, key=lambda j: abs(j - i))]["camera"] for i in range(T)]  # fill failed frames
-R = torch.tensor([c["rotation_matrix"] for c in cam], device=dev)
-C = torch.tensor([c["position_meters"] for c in cam], device=dev)
-K = torch.tensor([[[c["x_focal_length"], 0, c["principal_point"][0]], [0, c["y_focal_length"], c["principal_point"][1]], [0, 0, 1]] for c in cam], device=dev)
-K[:, :2] *= (W / 2 / K[:, 0, 2])[:, None, None]  # in case calibration ran at another resolution
-V = torch.eye(4, device=dev).repeat(T, 1, 1)
-V[:, :3, :3], V[:, :3, 3] = R, -(R @ C[..., None])[..., 0]
-Kh = K.clone(); Kh[:, :2] /= 2  # half resolution, for fitting
+
+
+def cameras(cam):
+    R = torch.tensor([c["rotation_matrix"] for c in cam], device=dev)
+    C = torch.tensor([c["position_meters"] for c in cam], device=dev)
+    K = torch.tensor([[[c["x_focal_length"], 0, c["principal_point"][0]], [0, c["y_focal_length"], c["principal_point"][1]], [0, 0, 1]] for c in cam], device=dev)
+    K[:, :2] *= (W / 2 / K[:, 0, 2])[:, None, None]  # in case calibration ran at another resolution
+    V = torch.eye(4, device=dev).repeat(len(cam), 1, 1)
+    V[:, :3, :3], V[:, :3, 3] = R, -(R @ C[..., None])[..., 0]
+    Kh = K.clone(); Kh[:, :2] /= 2  # half resolution, for fitting
+    return R, C, K, V, Kh
+
+
+R, C, K, V, Kh = cameras(cam)
 h2, w2 = H // 2, W // 2
 print(f"{T} frames {W}x{H}, {len(ok)} calibrated, camera at {C.median(0).values.tolist()} m")
 
@@ -68,6 +80,7 @@ df = pd.read_csv(S1 / "players.csv").dropna(subset=["x_m"])
 df["t"] = df.frame.map({c["frame"]: i for i, c in enumerate(cams)})
 seg = YOLO("yolo11x-seg.pt")
 excl = torch.zeros(T, h2, w2, dtype=torch.bool, device=dev)  # pixels kept out of the background fit
+shrink = lambda ex: F.max_pool2d(F.max_pool2d(ex[None, None].float(), 15, 1, 7), 2)[0, 0] > 0  # grow a little, half resolution
 app = {}  # (track, t) -> per pixel: (u, height) on the player's plane, rgb, Gaussian size
 for t in range(T):
     r = seg.predict(np.ascontiguousarray(frames[t][..., ::-1]), classes=[0], conf=0.2, imgsz=1280, retina_masks=True, verbose=False)[0]
@@ -97,7 +110,7 @@ for t in range(T):
         s = ((B - C[t]) @ n) / (ray @ n)  # depth along each pixel ray to the player's plane
         X = C[t] + s[:, None] * ray - B
         app[d.track_id, t] = (X[:, :2] @ torch.stack([-n[1], n[0]]), -X[:, 2], img[ys, xs], (0.6 * s / K[t, 0, 0])[:, None].expand(-1, 3))
-    excl[t] = F.max_pool2d(F.max_pool2d(ex[None, None].float(), 15, 1, 7), 2)[0, 0] > 0
+    excl[t] = shrink(ex)
 print(f"segmented players in {len(app)} of {len(df)} tracked detections")
 
 tracks = {}  # track -> (frames, smoothed xy per frame, frames with appearance)
@@ -125,6 +138,28 @@ def players_at(t, P, skip=None):
         return [torch.zeros(0, 3, device=dev), torch.zeros(0, 3, device=dev), torch.zeros(0, device=dev), torch.zeros(0, 3, device=dev)]
     return [torch.cat(x) for x in zip(*out)]
 
+
+# ---------------- frames the background is fit from ----------------
+tgt = torch.stack([torch.from_numpy(cv2.resize(f, (w2, h2), interpolation=cv2.INTER_AREA)) for f in frames]).to(dev)
+bR, bC, bV, bKh, btgt, bexcl, bok = R, C, V, Kh, tgt, excl, ok
+if a.bg:  # the same broadcast over a longer stretch: people masked out, nothing else kept from it
+    bcams = json.load(open(f"outputs/stage1/{a.bg}/cameras.json"))
+    bdf = pd.read_csv(f"outputs/stage1/{a.bg}/players.csv")
+    allp = sorted(glob.glob(f"data/SoccerNetGS/*/SNGS-{a.vid}/img1/*.jpg"))
+    sel = [i for i, c in enumerate(bcams) if c["camera"]][::a.bg_stride]
+    bR, bC, _, bV, bKh = cameras([bcams[i]["camera"] for i in sel])
+    btgt, bexcl = [], []
+    for i in sel:
+        f = cv2.imread(allp[i])  # cameras.json is in frame order, like the image files
+        r = seg.predict(f, classes=[0], conf=0.2, imgsz=1280, retina_masks=True, verbose=False)[0]
+        ex = r.masks.data.any(0) if r.masks is not None else torch.zeros(H, W, dtype=torch.bool, device=dev)
+        for d in bdf[bdf.frame == bcams[i]["frame"]].itertuples():
+            ex[max(int(d.box_t) - 4, 0):int(d.box_t + d.box_h) + 4, max(int(d.box_l) - 4, 0):int(d.box_l + d.box_w) + 4] = True
+        bexcl.append(shrink(ex))
+        btgt.append(torch.from_numpy(cv2.resize(f[..., ::-1], (w2, h2), interpolation=cv2.INTER_AREA).copy()).to(dev))
+    btgt, bexcl, bok = torch.stack(btgt), torch.stack(bexcl), list(range(len(sel)))
+    print(f"background fit from {len(sel)} frames of {a.bg} (every {a.bg_stride}th calibrated frame)")
+bT = len(bok)
 
 # ---------------- background Gaussians on known geometry ----------------
 def pitch_lines():
@@ -163,14 +198,13 @@ per = torch.cat([torch.stack([torch.arange(-57, 57, .1, device=dev), torch.full(
 hz = torch.arange(.05, 1, .1, device=dev)
 boards = torch.cat([per.repeat_interleave(len(hz), 0), -hz.repeat(len(per))[:, None]], 1)
 
-# drop stand points the broadcast camera sees from close by: they'd hide the near touchline
+# stand points the broadcast camera sees from close by would hide the near touchline: left out of broadcast renders only
 stand = torch.cat([bowl, boards])
 near = torch.zeros(len(stand), dtype=torch.bool, device=dev)
-for t in range(T):
-    Xc = (stand - C[t]) @ R[t].T
+for t in range(bT):
+    Xc = (stand - bC[t]) @ bR[t].T
     near |= (Xc[:, 2] > 0) & (Xc[:, 2] < 25)
-stand = stand[~near]
-nb = int((~near[:len(bowl)]).sum())
+nb = len(bowl)
 
 goal = []  # goal frames: posts and crossbar, 7.32 x 2.44 m
 for sx in (-52.5, 52.5):
@@ -185,30 +219,43 @@ means = torch.cat([ground, stand])
 N, NG = len(means), len(ground)
 kind = torch.cat([torch.zeros(NG), torch.ones(nb), 2 * torch.ones(len(stand) - nb)]).to(dev)  # 0 ground, 1 bowl, 2 boards
 on_line = torch.cat([on_line, torch.zeros(N - NG, dtype=torch.bool, device=dev)])
+hide = torch.cat([torch.zeros(NG, dtype=torch.bool, device=dev), near])  # near stand, left out from the broadcast camera
 print(f"background: {NG} ground + {nb} stand + {len(stand) - nb} board Gaussians, {len(goal)} goal frame")
 
 # ---------------- initial colours: average of every frame that sees each Gaussian ----------------
-tgt = torch.stack([torch.from_numpy(cv2.resize(f, (w2, h2), interpolation=cv2.INTER_AREA)) for f in frames]).to(dev)
 csum, cnt = torch.zeros(N, 3, device=dev), torch.zeros(N, device=dev)
-for t in range(T):
-    Xc = ((means - C[t]) @ R[t].T) @ Kh[t].T
+for t in range(bT):
+    Xc = ((means - bC[t]) @ bR[t].T) @ bKh[t].T
     z = Xc[:, 2].clamp(min=1e-6)
     u, v = (Xc[:, 0] / z).long(), (Xc[:, 1] / z).long()
-    vis = (z > 0) & (u >= 0) & (u < w2) & (v >= 0) & (v < h2)
-    vis[vis.clone()] &= ~excl[t, v[vis], u[vis]]
-    csum[vis] += tgt[t, v[vis], u[vis]].float() / 255
+    vis = (z > 0) & (u >= 0) & (u < w2) & (v >= 0) & (v < h2) & ~hide
+    vis[vis.clone()] &= ~bexcl[t, v[vis], u[vis]]
+    csum[vis] += btgt[t, v[vis], u[vis]].float() / 255
     cnt[vis] += 1
 seen = cnt > 0
 col = csum / cnt.clamp(min=1)[:, None]
 grass = col[seen & (kind == 0) & ~on_line].median(0).values
 col[~seen & (kind == 0)] = grass
 col[~seen & (kind == 0) & on_line] = 0.9
-for k in (1, 2):  # unseen stand: crowd colours sampled from the seen stand; unseen boards: their mean
+# unseen stand: copy the stand seen across the pitch (stadiums are roughly symmetric), so it is real crowd, not noise
+G = torch.full((round(192 / b) + 1, round(156 / b) + 1, 3), -1., device=dev)
+cell = lambda xy: (((xy[:, 0] + 96) / b).round().long().clamp(0, G.shape[0] - 1), ((xy[:, 1] + 78) / b).round().long().clamp(0, G.shape[1] - 1))
+sb = seen & (kind == 1)
+G[cell(means[sb])] = col[sb]
+for fx, fy in ((1, -1), (-1, 1), (-1, -1)):
+    miss = (~seen & (kind == 1)).nonzero()[:, 0]
+    got = G[cell(means[miss, :2] * torch.tensor([fx, fy], device=dev))]
+    hit = got[:, 0] >= 0
+    col[miss[hit]] = got[hit]
+    seen[miss[hit]] = True  # only for the next flip; restored below
+real = seen.clone()  # real footage behind the colour: seen, or mirrored from a seen stand
+seen = cnt > 0
+for k in (1, 2):  # still unseen stand: crowd colours sampled from the seen stand; unseen boards: their mean
     pool = col[seen & (kind == k)]
-    miss = ~seen & (kind == k)
+    miss = ~seen & (kind == k) & ((col == 0).all(1) if k == 1 else True)
     if len(pool):
         col[miss] = pool[torch.randint(len(pool), (int(miss.sum()),), device=dev)] if k == 1 else pool.mean(0)
-print(f"seen by the broadcast: {seen.float().mean():.0%} of background Gaussians")
+print(f"seen by the broadcast: {seen.float().mean():.0%} of background Gaussians, {real.float().mean():.0%} with mirrored stands")
 
 # ---------------- fit colours, opacities and sizes to the frames ----------------
 c_l = torch.logit(col.clamp(.02, .98)).requires_grad_()
@@ -221,12 +268,13 @@ gcol, gop, gsc = torch.full((len(goal), 3), .95, device=dev), torch.ones(len(goa
 opt = torch.optim.Adam([{"params": [c_l], "lr": .02}, {"params": [o_l], "lr": .02}, {"params": [s_l], "lr": .002}, {"params": [sky_l], "lr": .01}])
 
 
-def render(V1, K1, w, h, extra=None, unseen=False):
-    """RGB from camera V1, K1. With unseen=True: RGB is 1 where the broadcast never saw (unseen background, sky), and a 4th channel is depth."""
-    c0 = (~seen).float()[:, None].expand(-1, 3) if unseen else torch.sigmoid(c_l)
+def render(V1, K1, w, h, extra=None, unseen=False, broadcast=False):
+    """RGB from camera V1, K1. With unseen=True: RGB is 1 where no footage stands behind the colour (prior grass, sky), and a 4th channel is depth."""
+    c0 = (~real).float()[:, None].expand(-1, 3) if unseen else torch.sigmoid(c_l)
     if unseen and extra:
         extra = [extra[0], torch.zeros_like(extra[1]), *extra[2:]]
-    m, c, o, s = [torch.cat(x) for x in zip((means, c0, torch.sigmoid(o_l), s_l.exp()), (goal, gcol * (not unseen), gop, gsc), *([extra] if extra else []))]
+    bg = [x[~hide] if broadcast else x for x in (means, c0, torch.sigmoid(o_l), s_l.exp())]
+    m, c, o, s = [torch.cat(x) for x in zip(bg, (goal, gcol * (not unseen), gop, gsc), *([extra] if extra else []))]
     q = torch.tensor([1., 0, 0, 0], device=dev).expand(len(m), 4).contiguous()
     img, _, _ = rasterization(m, q, s, o, c, V1[None], K1[None], w, h, render_mode="RGB+ED" if unseen else "RGB",
                               backgrounds=(torch.ones(3, device=dev) if unseen else torch.sigmoid(sky_l))[None], packed=False,
@@ -235,9 +283,9 @@ def render(V1, K1, w, h, extra=None, unseen=False):
 
 
 for it in range(a.iters + 1):
-    t = ok[np.random.randint(len(ok))]
-    keep = ~excl[t]
-    loss = ((render(V[t], Kh[t], w2, h2) - tgt[t].float() / 255).abs().mean(-1) * keep).sum() / keep.sum()
+    t = bok[np.random.randint(len(bok))]
+    keep = ~bexcl[t]
+    loss = ((render(bV[t], bKh[t], w2, h2, broadcast=True) - btgt[t].float() / 255).abs().mean(-1) * keep).sum() / keep.sum()
     opt.zero_grad(); loss.backward(); opt.step()
     if it % 500 == 0:
         print(f"fit {it}/{a.iters}: L1 {loss.item():.4f}")
@@ -300,7 +348,7 @@ FR.mkdir(exist_ok=True)
 with torch.no_grad():
     for t in range(T):
         Cb = C[t].cpu().numpy()
-        rec = render(V[t], K[t], W, H, players_at(t, Cb))
+        rec = render(V[t], K[t], W, H, players_at(t, Cb), broadcast=True)
         gt = torch.from_numpy(frames[t]).to(dev).float() / 255
         err = ((rec - gt) ** 2).mean(-1)
         bgm = ~F.interpolate(excl[t][None, None].float(), size=(H, W))[0, 0].bool()

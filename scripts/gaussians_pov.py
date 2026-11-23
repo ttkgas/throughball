@@ -18,7 +18,7 @@ broadcast camera points (a stand-in for the ball, which stage 1 doesn't track).
 Writes outputs/stage3/<vid>/: pov_<track>.mp4 (broadcast | re-render | first person | map),
 preview_<track>.png, metrics.json, and pov_<track>/ with the raw first-person frames for stage 4
 (rgb_*.png, unseen_*.png where 255 = nothing known there (no broadcast frame saw it, not pitch), depth_*.png in mm with 0 for sky, cameras.json).
-Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match]
+Usage: python scripts/gaussians_pov.py [--vid 021] [--track ID] [--iters 3000] [--bg 021_full,024] [--fill 10] [--out 021_match] [--own-share 0.5]
 """
 import argparse
 import glob
@@ -47,6 +47,8 @@ p.add_argument("--bg", default=None, help="stage 1 exports to fit the background
                "moments fill what this window never saw. An export's clip is the part of its name before '_'")
 p.add_argument("--out", default=None, help="output folder name under outputs/stage3 (default: --vid)")
 p.add_argument("--bg-stride", type=int, default=3, help="use every n-th frame of --bg")
+p.add_argument("--own-share", type=float, default=0, help="share of fit steps drawn from the first --bg export alone "
+               "(the clip itself), so other clips add coverage without blurring it; 0 draws all frames alike")
 p.add_argument("--fill", type=int, default=0, help="generate what no footage covers with SDXL inpainting on every n-th "
                "first-person frame, and bake it into the Gaussians' colours so it stays put from frame to frame (0: off)")
 a = p.parse_args()
@@ -147,6 +149,7 @@ def players_at(t, P, skip=None):
 # ---------------- frames the background is fit from ----------------
 tgt = torch.stack([torch.from_numpy(cv2.resize(f, (w2, h2), interpolation=cv2.INTER_AREA)) for f in frames]).to(dev)
 bR, bC, bV, bKh, btgt, bexcl, bok = R, C, V, Kh, tgt, excl, ok
+own = len(bok)  # frames of the first export, the ones --own-share favours
 if a.bg:  # the same match over a longer stretch or other clips: people masked out, nothing else kept from them
     sel, btgt, bexcl = [], [], []
     for name in a.bg.split(","):
@@ -165,6 +168,7 @@ if a.bg:  # the same match over a longer stretch or other clips: people masked o
             bexcl.append(shrink(ex))
             btgt.append(torch.from_numpy(cv2.resize(f[..., ::-1], (w2, h2), interpolation=cv2.INTER_AREA).copy()).to(dev))
             sel.append(bcams[i]["camera"])
+        own = len(sel) if name == a.bg.split(",")[0] else own
         print(f"background: {len(good[::a.bg_stride])} frames of {name} ({len(good)} of {len(bcams)} with a plausible camera, every {a.bg_stride}th)")
     bR, bC, _, bV, bKh = cameras(sel)
     btgt, bexcl, bok = torch.stack(btgt), torch.stack(bexcl), list(range(len(sel)))
@@ -293,7 +297,7 @@ def render(V1, K1, w, h, extra=None, unseen=False, broadcast=False):
 
 
 for it in range(a.iters + 1):
-    t = bok[np.random.randint(len(bok))]
+    t = bok[np.random.randint(own if np.random.rand() < a.own_share else len(bok))]
     keep = ~bexcl[t]
     loss = ((render(bV[t], bKh[t], w2, h2, broadcast=True) - btgt[t].float() / 255).abs().mean(-1) * keep).sum() / keep.sum()
     opt.zero_grad(); loss.backward(); opt.step()

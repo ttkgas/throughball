@@ -6,7 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SAVE=${1:-}
-save() { [ -z "$SAVE" ] || { mkdir -p "$SAVE"; cp -r "outputs/stage$1" "$SAVE/"; echo "== stage $1 saved to $SAVE"; }; }
+save() {  # never creates SAVE_DIR's parent, so an unmounted Drive is reported, not shadowed
+  [ -z "$SAVE" ] && return; mkdir "$SAVE" 2>/dev/null || true
+  cp -r "outputs/stage$1" "$SAVE/" && echo "== stage $1 saved to $SAVE" || echo "!! stage $1 not saved: is $SAVE's parent mounted?"
+}
 TL=third_party/sn-gamestate/.venv/bin
 newest() { ls -t outputs/throughball-setup/*/*/states/*.pklz | head -1; }
 
